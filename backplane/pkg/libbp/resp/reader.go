@@ -14,6 +14,13 @@ import (
 	"strings"
 )
 
+const (
+	MaxBulkStringLength = 64 * 1024 * 1024 // 64MB
+	MaxArrayCount       = 65536
+	MaxDepth            = 32
+	MaxLineLength       = 64 * 1024 // 64KB
+)
+
 // Reader parses RESP streams
 type Reader struct {
 	r *bufio.Reader
@@ -26,6 +33,14 @@ func NewReader(rd io.Reader) *Reader {
 
 // ReadValue reads the next RESP Value from the stream
 func (r *Reader) ReadValue() (Value, error) {
+	return r.readValueWithDepth(0)
+}
+
+func (r *Reader) readValueWithDepth(depth int) (Value, error) {
+	if depth > MaxDepth {
+		return Value{}, fmt.Errorf("%w: recursion depth exceeded", ErrProtocol)
+	}
+
 	line, err := r.readLine()
 	if err != nil {
 		return Value{}, err
@@ -56,6 +71,12 @@ func (r *Reader) ReadValue() (Value, error) {
 		if err != nil {
 			return Value{}, fmt.Errorf("%w: invalid bulk string length %q", ErrProtocol, payload)
 		}
+		if length < -1 {
+			return Value{}, fmt.Errorf("%w: negative bulk string length %d", ErrProtocol, length)
+		}
+		if length > MaxBulkStringLength {
+			return Value{}, fmt.Errorf("%w: bulk string length %d exceeds max %d", ErrProtocol, length, MaxBulkStringLength)
+		}
 		if length == -1 {
 			return Value{Type: TypeBulkString, IsNull: true}, nil
 		}
@@ -70,12 +91,18 @@ func (r *Reader) ReadValue() (Value, error) {
 		if err != nil {
 			return Value{}, fmt.Errorf("%w: invalid array count %q", ErrProtocol, payload)
 		}
+		if count < -1 {
+			return Value{}, fmt.Errorf("%w: negative array count %d", ErrProtocol, count)
+		}
+		if count > MaxArrayCount {
+			return Value{}, fmt.Errorf("%w: array count %d exceeds max %d", ErrProtocol, count, MaxArrayCount)
+		}
 		if count == -1 {
 			return Value{Type: typ, IsNull: true}, nil
 		}
 		arr := make([]Value, count)
 		for i := 0; i < count; i++ {
-			val, err := r.ReadValue()
+			val, err := r.readValueWithDepth(depth + 1)
 			if err != nil {
 				return Value{}, err
 			}
@@ -88,16 +115,22 @@ func (r *Reader) ReadValue() (Value, error) {
 		if err != nil {
 			return Value{}, fmt.Errorf("%w: invalid map count %q", ErrProtocol, payload)
 		}
+		if count < -1 {
+			return Value{}, fmt.Errorf("%w: negative map count %d", ErrProtocol, count)
+		}
+		if count > MaxArrayCount {
+			return Value{}, fmt.Errorf("%w: map count %d exceeds max %d", ErrProtocol, count, MaxArrayCount)
+		}
 		if count == -1 {
 			return Value{Type: TypeMap, IsNull: true}, nil
 		}
 		m := make(map[string]Value, count)
 		for i := 0; i < count; i++ {
-			k, err := r.ReadValue()
+			k, err := r.readValueWithDepth(depth + 1)
 			if err != nil {
 				return Value{}, err
 			}
-			v, err := r.ReadValue()
+			v, err := r.readValueWithDepth(depth + 1)
 			if err != nil {
 				return Value{}, err
 			}
@@ -127,6 +160,9 @@ func (r *Reader) readLine() ([]byte, error) {
 			return nil, err
 		}
 		line = append(line, chunk...)
+		if len(line) > MaxLineLength {
+			return nil, fmt.Errorf("%w: line length exceeds max %d", ErrProtocol, MaxLineLength)
+		}
 		if len(line) >= 2 && line[len(line)-2] == '\r' && line[len(line)-1] == '\n' {
 			return line[:len(line)-2], nil
 		}

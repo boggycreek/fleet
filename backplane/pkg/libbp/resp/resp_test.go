@@ -81,6 +81,42 @@ func TestRESPReaderArraysAndMaps(t *testing.T) {
 	}
 }
 
+func TestRESPReaderLimits(t *testing.T) {
+	longLine := bytes.Repeat([]byte("a"), MaxLineLength+1)
+
+	var deeplyNested bytes.Buffer
+	for i := 0; i < 33; i++ {
+		deeplyNested.WriteString("*1\r\n")
+	}
+	deeplyNested.WriteString("+OK\r\n")
+
+	limitTests := []struct {
+		name  string
+		input string
+	}{
+		{"NegativeBulkStringLen", "$-2\r\n"},
+		{"OversizedBulkString", "$67108865\r\n"},
+		{"NegativeArrayCount", "*-2\r\n"},
+		{"OversizedArray", "*65537\r\n"},
+		{"NegativeMapCount", "%-2\r\n"},
+		{"OversizedMap", "%65537\r\n"},
+		{"DeepRecursion", deeplyNested.String()},
+		{"LineTooLong", string(longLine) + "\r\n"},
+	}
+
+	for _, tc := range limitTests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewReader(bytes.NewBufferString(tc.input))
+			_, err := r.ReadValue()
+			if err == nil {
+				t.Errorf("expected ErrProtocol for %s, got nil", tc.name)
+			} else if !errors.Is(err, ErrProtocol) {
+				t.Errorf("expected ErrProtocol for %s, got %v", tc.name, err)
+			}
+		})
+	}
+}
+
 func TestRESPReaderErrors(t *testing.T) {
 	errorInputs := []struct {
 		name  string
