@@ -295,6 +295,35 @@ install_xdg_go() {
         rm -rf "${tmp_dir}"
         exit 1
       fi
+
+      echo "  Fetching official Go checksum for verification..."
+      if ! curl -sSL -f -o "${tmp_dir}/${tarball}.sha256" "https://dl.google.com/go/${tarball}.sha256"; then
+        echo "Error: Failed to download Go checksum from https://dl.google.com/go/${tarball}.sha256" >&2
+        rm -rf "${tmp_dir}"
+        exit 1
+      fi
+      
+      local expected_sha256 actual_sha256
+      expected_sha256="$(cat "${tmp_dir}/${tarball}.sha256")"
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual_sha256="$(sha256sum "${tmp_dir}/${tarball}" | awk '{print $1}')"
+      elif command -v shasum >/dev/null 2>&1; then
+        actual_sha256="$(shasum -a 256 "${tmp_dir}/${tarball}" | awk '{print $1}')"
+      else
+        echo "Error: Neither sha256sum nor shasum is available for checksum verification." >&2
+        rm -rf "${tmp_dir}"
+        exit 1
+      fi
+
+      if [ "${expected_sha256}" != "${actual_sha256}" ]; then
+        echo "Error: Go SDK checksum mismatch!" >&2
+        echo "Expected: ${expected_sha256}" >&2
+        echo "Actual:   ${actual_sha256}" >&2
+        rm -rf "${tmp_dir}"
+        exit 1
+      fi
+      echo "  ✓ Checksum verified (${actual_sha256})"
+
       mkdir -p "${GO_SDK_BASE}"
       tar -xzf "${tmp_dir}/${tarball}" -C "${tmp_dir}"
       rm -rf "${target_dir}"
@@ -825,6 +854,40 @@ if [ "${SKIP_BEADS}" = false ]; then
       rm -rf "${TMP_BEADS}"
     else
       if curl -sSL -f -o "${TMP_BEADS}/${BEADS_TARBALL}" "${BEADS_URL}"; then
+        echo "  Fetching official Beads checksums for verification..."
+        checksums_url="https://github.com/gastownhall/beads/releases/download/v${BEADS_VER}/checksums.txt"
+        if ! curl -sSL -f -o "${TMP_BEADS}/checksums.txt" "${checksums_url}"; then
+          echo "Error: Failed to download Beads checksums from ${checksums_url}" >&2
+          rm -rf "${TMP_BEADS}"
+          exit 1
+        fi
+
+        expected_sha256="$(grep "${BEADS_TARBALL}" "${TMP_BEADS}/checksums.txt" | awk '{print $1}')"
+        if [ -z "${expected_sha256}" ]; then
+          echo "Error: Checksum for ${BEADS_TARBALL} not found in checksums.txt" >&2
+          rm -rf "${TMP_BEADS}"
+          exit 1
+        fi
+
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual_sha256="$(sha256sum "${TMP_BEADS}/${BEADS_TARBALL}" | awk '{print $1}')"
+        elif command -v shasum >/dev/null 2>&1; then
+          actual_sha256="$(shasum -a 256 "${TMP_BEADS}/${BEADS_TARBALL}" | awk '{print $1}')"
+        else
+          echo "Error: Neither sha256sum nor shasum is available for checksum verification." >&2
+          rm -rf "${TMP_BEADS}"
+          exit 1
+        fi
+
+        if [ "${expected_sha256}" != "${actual_sha256}" ]; then
+          echo "Error: Beads tarball checksum mismatch!" >&2
+          echo "Expected: ${expected_sha256}" >&2
+          echo "Actual:   ${actual_sha256}" >&2
+          rm -rf "${TMP_BEADS}"
+          exit 1
+        fi
+        echo "  ✓ Checksum verified (${actual_sha256})"
+
         tar -xzf "${TMP_BEADS}/${BEADS_TARBALL}" -C "${TMP_BEADS}" bd
         cp -f "${TMP_BEADS}/bd" "${XDG_BIN_HOME}/bd"
         chmod +x "${XDG_BIN_HOME}/bd"
