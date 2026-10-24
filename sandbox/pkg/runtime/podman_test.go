@@ -466,3 +466,44 @@ func TestStartHostAgentContainer(t *testing.T) {
 		t.Errorf("expected workspace mount in run command, got: %s", runCmd)
 	}
 }
+
+func TestValkeyACLPermissions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tmpDir := t.TempDir()
+	t.Cleanup(func() {
+		_ = exec.Command("podman", "unshare", "rm", "-rf", tmpDir).Run()
+	})
+
+	paths := config.Paths{
+		DataHome: tmpDir,
+	}
+
+	dummyPodman := filepath.Join(tmpDir, "podman")
+	_ = os.WriteFile(dummyPodman, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath)
+
+	_ = RecreateValkeyContainer(ctx, paths, "admin", "human", "operator")
+
+	valkeyConfigDir := filepath.Join(paths.DataHome, "valkey")
+	aclFile := filepath.Join(valkeyConfigDir, "valkey-users.acl")
+
+	dirInfo, err := os.Stat(valkeyConfigDir)
+	if err != nil {
+		t.Fatalf("failed to stat valkey config dir: %v", err)
+	}
+	if dirInfo.Mode().Perm() != 0700 {
+		t.Errorf("expected valkey config dir to have permissions 0700, got %04o", dirInfo.Mode().Perm())
+	}
+
+	fileInfo, err := os.Stat(aclFile)
+	if err != nil {
+		t.Fatalf("failed to stat valkey users acl file: %v", err)
+	}
+	if fileInfo.Mode().Perm() != 0600 {
+		t.Errorf("expected valkey users acl file to have permissions 0600, got %04o", fileInfo.Mode().Perm())
+	}
+}

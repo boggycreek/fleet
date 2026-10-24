@@ -697,7 +697,7 @@ func StartInfraStack(ctx context.Context, paths config.Paths, adminPass, humanPa
 
 	// Render Valkey ACL in config directory
 	valkeyConfigDir := filepath.Join(paths.DataHome, "valkey")
-	_ = os.MkdirAll(valkeyConfigDir, 0755)
+	_ = os.MkdirAll(valkeyConfigDir, 0700)
 	aclFile := filepath.Join(valkeyConfigDir, "valkey-users.acl")
 
 	if adminPass == "" {
@@ -714,9 +714,9 @@ func StartInfraStack(ctx context.Context, paths config.Paths, adminPass, humanPa
 user admin on >%s ~* &* +@all
 user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* %%R~*:* &* +@all (+xadd ~*:inbox)
 `, adminPass, humanName, humanPass, humanName)
-	_ = os.WriteFile(aclFile, []byte(aclContent), 0644)
-	_ = os.Chmod(aclFile, 0644)
-	_ = os.Chmod(valkeyConfigDir, 0755)
+	_ = os.WriteFile(aclFile, []byte(aclContent), 0600)
+	_ = os.Chmod(aclFile, 0600)
+	_ = os.Chmod(valkeyConfigDir, 0700)
 
 	// 1. Start Valkey container if not already running
 	valkeyContainer := infraValkeyContainer
@@ -1230,7 +1230,7 @@ func RecreateValkeyContainer(ctx context.Context, paths config.Paths, adminPass,
 	_ = EnsureVolume(ctx, valkeyVol)
 
 	valkeyConfigDir := filepath.Join(paths.DataHome, "valkey")
-	_ = os.MkdirAll(valkeyConfigDir, 0755)
+	_ = os.MkdirAll(valkeyConfigDir, 0700)
 	aclFile := filepath.Join(valkeyConfigDir, "valkey-users.acl")
 
 	if adminPass == "" {
@@ -1247,9 +1247,9 @@ func RecreateValkeyContainer(ctx context.Context, paths config.Paths, adminPass,
 user admin on >%s ~* &* +@all
 user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* %%R~*:* &* +@all (+xadd ~*:inbox)
 `, adminPass, humanName, humanPass, humanName)
-	_ = os.WriteFile(aclFile, []byte(aclContent), 0644)
-	_ = os.Chmod(aclFile, 0644)
-	_ = os.Chmod(valkeyConfigDir, 0755)
+	_ = os.WriteFile(aclFile, []byte(aclContent), 0600)
+	_ = os.Chmod(aclFile, 0600)
+	_ = os.Chmod(valkeyConfigDir, 0700)
 
 	valkeyPort := os.Getenv("BP_PORT")
 	if valkeyPort == "" {
