@@ -359,12 +359,18 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 		"-e", fmt.Sprintf("AGENT_ROLE=%s", cfg.Role),
 		"-e", fmt.Sprintf("ROLE=%s", cfg.Role),
 		"-e", fmt.Sprintf("BP_AGENT=%s", cfg.Name),
-		"-e", fmt.Sprintf("BP_PASSWORD=%s", cfg.Password),
+		"-e", "BP_PASSWORD",
 		"-e", fmt.Sprintf("BP_HOST=%s", containerBPHost),
 		"-e", fmt.Sprintf("BP_PORT=%d", bpPort),
-		"-e", fmt.Sprintf("BP_SIGNING_KEY_PEM=%s", cfg.SigningKeyPEM),
+		"-e", "BP_SIGNING_KEY_PEM",
 		"-e", fmt.Sprintf("VALKEY_ADDR=%s:%d", containerBPHost, bpPort),
-		"-e", fmt.Sprintf("VALKEY_PASSWORD=%s", cfg.Password),
+		"-e", "VALKEY_PASSWORD",
+	}
+
+	extraEnv := []string{
+		fmt.Sprintf("BP_PASSWORD=%s", cfg.Password),
+		fmt.Sprintf("BP_SIGNING_KEY_PEM=%s", cfg.SigningKeyPEM),
+		fmt.Sprintf("VALKEY_PASSWORD=%s", cfg.Password),
 	}
 
 	if cfg.Harness != "" {
@@ -399,12 +405,12 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 	}
 
 	if cfg.ModelAPIKey != "" {
-		args = append(args,
-			"-e", fmt.Sprintf("OPENAI_API_KEY=%s", cfg.ModelAPIKey),
-		)
+		args = append(args, "-e", "OPENAI_API_KEY")
+		extraEnv = append(extraEnv, fmt.Sprintf("OPENAI_API_KEY=%s", cfg.ModelAPIKey))
 	} else if cfg.ModelURL != "" {
 		// Default dummy key for endpoints that require header presence (e.g. LiteLLM/vLLM)
-		args = append(args, "-e", "OPENAI_API_KEY=local-openai-key")
+		args = append(args, "-e", "OPENAI_API_KEY")
+		extraEnv = append(extraEnv, "OPENAI_API_KEY=local-openai-key")
 	}
 
 	sonarArgs, sonarEnv := sonarContainerEnv(cfg)
@@ -416,15 +422,17 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 	args = append(args, cfg.Image)
 
 	cmd := CommandContext(ctx, "podman", args...)
+	cmd.Env = append(cmd.Environ(), extraEnv...)
 	if len(sonarEnv) > 0 {
-		cmd.Env = append(cmd.Environ(), sonarEnv...)
+		cmd.Env = append(cmd.Env, sonarEnv...)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if IsRootlessNetnsError(err, out) {
 			_ = EnsureRootlessNetNS(ctx)
 			retryCmd := CommandContext(ctx, "podman", args...)
+			retryCmd.Env = append(retryCmd.Environ(), extraEnv...)
 			if len(sonarEnv) > 0 {
-				retryCmd.Env = append(retryCmd.Environ(), sonarEnv...)
+				retryCmd.Env = append(retryCmd.Env, sonarEnv...)
 			}
 			if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr == nil {
 				return nil
@@ -492,12 +500,18 @@ func startHostAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths
 		"-e", fmt.Sprintf("AGENT_ROLE=%s", cfg.Role),
 		"-e", fmt.Sprintf("ROLE=%s", cfg.Role),
 		"-e", fmt.Sprintf("BP_AGENT=%s", cfg.Name),
-		"-e", fmt.Sprintf("BP_PASSWORD=%s", cfg.Password),
+		"-e", "BP_PASSWORD",
 		"-e", fmt.Sprintf("BP_HOST=%s", containerBPHost),
 		"-e", fmt.Sprintf("BP_PORT=%d", bpPort),
-		"-e", fmt.Sprintf("BP_SIGNING_KEY_PEM=%s", cfg.SigningKeyPEM),
+		"-e", "BP_SIGNING_KEY_PEM",
 		"-e", fmt.Sprintf("VALKEY_ADDR=%s:%d", containerBPHost, bpPort),
-		"-e", fmt.Sprintf("VALKEY_PASSWORD=%s", cfg.Password),
+		"-e", "VALKEY_PASSWORD",
+	}
+
+	extraEnv := []string{
+		fmt.Sprintf("BP_PASSWORD=%s", cfg.Password),
+		fmt.Sprintf("BP_SIGNING_KEY_PEM=%s", cfg.SigningKeyPEM),
+		fmt.Sprintf("VALKEY_PASSWORD=%s", cfg.Password),
 	}
 
 	if cfg.Harness != "" {
@@ -532,11 +546,11 @@ func startHostAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths
 	}
 
 	if cfg.ModelAPIKey != "" {
-		args = append(args,
-			"-e", fmt.Sprintf("OPENAI_API_KEY=%s", cfg.ModelAPIKey),
-		)
+		args = append(args, "-e", "OPENAI_API_KEY")
+		extraEnv = append(extraEnv, fmt.Sprintf("OPENAI_API_KEY=%s", cfg.ModelAPIKey))
 	} else if cfg.ModelURL != "" {
-		args = append(args, "-e", "OPENAI_API_KEY=local-openai-key")
+		args = append(args, "-e", "OPENAI_API_KEY")
+		extraEnv = append(extraEnv, "OPENAI_API_KEY=local-openai-key")
 	}
 
 	sonarArgs, sonarEnv := sonarContainerEnv(cfg)
@@ -548,8 +562,9 @@ func startHostAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths
 	args = append(args, cfg.Image)
 
 	cmd := CommandContext(ctx, "podman", args...)
+	cmd.Env = append(cmd.Environ(), extraEnv...)
 	if len(sonarEnv) > 0 {
-		cmd.Env = append(cmd.Environ(), sonarEnv...)
+		cmd.Env = append(cmd.Env, sonarEnv...)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed running host agent container %s: %v (%s)", cfg.ContainerName, err, string(out))
