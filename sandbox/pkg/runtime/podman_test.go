@@ -8,6 +8,8 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -545,5 +547,70 @@ func TestValkeyACLPermissions(t *testing.T) {
 	}
 	if fileInfo.Mode().Perm() != 0600 {
 		t.Errorf("expected valkey users acl file to have permissions 0600, got %04o", fileInfo.Mode().Perm())
+	}
+}
+
+func TestBootstrapForgejo_NoPasswordInArgv(t *testing.T) {
+	var argvList [][]string
+	mockRun := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		argvList = append(argvList, args)
+		return exec.Command("true")
+	}
+	restore := SetExecCommandContextForTesting(mockRun)
+	defer restore()
+
+	// Start a dummy HTTP server to satisfy the version check
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	t.Setenv("FORGEJO_URL", ts.URL)
+	
+	err := BootstrapForgejo(context.Background(), "mysecretpass123")
+	if err != nil {
+		t.Fatalf("BootstrapForgejo failed: %v", err)
+	}
+
+	for _, args := range argvList {
+		for _, arg := range args {
+			if strings.Contains(arg, "mysecretpass123") {
+				t.Errorf("found admin password exposed in argv: %v", args)
+			}
+		}
+	}
+}
+
+func TestBootstrapForgejo_EmptyPassword(t *testing.T) {
+	t.Setenv("FORGEJO_ADMIN_PASSWORD", "")
+	t.Setenv("GITEA_ADMIN_PASSWORD", "")
+	err := BootstrapForgejo(context.Background(), "")
+	if err == nil {
+		t.Fatalf("expected error when admin password is empty, got nil")
+	}
+}
+
+func TestEnsureEnvPasswords(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	paths := config.Paths{EnvFile: envPath}
+
+	var adminPass, humanPass string
+	err := ensureEnvPasswords(paths, &adminPass, &humanPass)
+	if err != nil {
+		t.Fatalf("ensureEnvPasswords failed: %v", err)
+	}
+
+	if adminPass == "" || humanPass == "" {
+		t.Errorf("expected generated non-empty passwords, got admin=%q, human=%q", adminPass, humanPass)
+	}
+
+	// Verify passwords were saved to .env
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("failed reading .env: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, adminPass) || !strings.Contains(content, humanPass) {
+		t.Errorf("expected .env to contain generated passwords, got:\n%s", content)
 	}
 }

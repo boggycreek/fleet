@@ -8,6 +8,8 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -676,8 +678,44 @@ func InspectAgentContainer(ctx context.Context, containerName string) (*Containe
 	}, nil
 }
 
+func generateSecurePassword() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "fallback_secure_pass_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	return hex.EncodeToString(b)
+}
+
+func ensureEnvPasswords(paths config.Paths, adminPass, humanPass *string) error {
+	if *adminPass == "" {
+		*adminPass = os.Getenv("FORGEJO_ADMIN_PASSWORD")
+	}
+	if *adminPass == "" {
+		*adminPass = os.Getenv("GITEA_ADMIN_PASSWORD")
+	}
+	if *adminPass == "" {
+		*adminPass = generateSecurePassword()
+		if paths.EnvFile != "" {
+			_ = paths.SetEnvVar("FORGEJO_ADMIN_PASSWORD", *adminPass)
+		}
+	}
+
+	if *humanPass == "" {
+		*humanPass = os.Getenv("HUMAN_PASSWORD")
+	}
+	if *humanPass == "" {
+		*humanPass = generateSecurePassword()
+		if paths.EnvFile != "" {
+			_ = paths.SetEnvVar("HUMAN_PASSWORD", *humanPass)
+		}
+	}
+	return nil
+}
+
 // StartInfraStack launches the shared Valkey and Gitea containers using Podman directly
 func StartInfraStack(ctx context.Context, paths config.Paths, adminPass, humanPass, humanName string) error {
+	_ = ensureEnvPasswords(paths, &adminPass, &humanPass)
+
 	netName := infraNetwork
 	if err := EnsureNetwork(ctx, netName); err != nil {
 		return fmt.Errorf("failed ensuring network %s: %w", netName, err)
@@ -715,12 +753,6 @@ func StartInfraStack(ctx context.Context, paths config.Paths, adminPass, humanPa
 	_ = os.MkdirAll(valkeyConfigDir, 0700)
 	aclFile := filepath.Join(valkeyConfigDir, "valkey-users.acl")
 
-	if adminPass == "" {
-		adminPass = "admin_backplane_pass"
-	}
-	if humanPass == "" {
-		humanPass = "human_backplane_pass"
-	}
 	if humanName == "" {
 		humanName = "operator"
 	}
@@ -968,7 +1000,7 @@ func BootstrapForgejo(ctx context.Context, adminPass string) error {
 		adminPass = os.Getenv("GITEA_ADMIN_PASSWORD")
 	}
 	if adminPass == "" {
-		adminPass = "admin_backplane_pass"
+		return fmt.Errorf("forgejo admin password is required but was empty")
 	}
 
 	forgejoURL := os.Getenv("FORGEJO_URL")
@@ -1013,41 +1045,48 @@ func BootstrapForgejo(ctx context.Context, adminPass string) error {
 	}
 
 	// Ensure admin user via container CLI (using forgejo CLI, fallback to gitea CLI if needed)
-	createAdminCmd := CommandContext(ctx, "podman", "exec", infraForgejoContainer,
+	createAdminCmd := CommandContext(ctx, "podman", "exec", "-i", infraForgejoContainer,
 		"forgejo", "admin", "user", "create",
 		"--admin",
 		"--username", adminUser,
-		"--password", adminPass,
+		"--password-stdin",
 		"--email", fmt.Sprintf("%s@local.fleet", adminUser),
 		"--must-change-password=false",
 	)
+	createAdminCmd.Stdin = strings.NewReader(adminPass + "\n")
 	_ = createAdminCmd.Run()
 
 	// Ensure password is sync'd in case user already existed with different password
-	changePassCmd := CommandContext(ctx, "podman", "exec", infraForgejoContainer,
+	changePassCmd := CommandContext(ctx, "podman", "exec", "-i", infraForgejoContainer,
 		"forgejo", "admin", "user", "change-password",
 		"--username", adminUser,
-		"--password", adminPass,
+		"--password-stdin",
 		"--must-change-password=false",
 	)
+	changePassCmd.Stdin = strings.NewReader(adminPass + "\n")
 	_ = changePassCmd.Run()
 
 	// Also ensure legacy admin 'giteaadmin' has access if migrating
 	if adminUser != "giteaadmin" {
-		_ = CommandContext(ctx, "podman", "exec", infraForgejoContainer,
+		createLegacyAdminCmd := CommandContext(ctx, "podman", "exec", "-i", infraForgejoContainer,
 			"forgejo", "admin", "user", "create",
 			"--admin",
 			"--username", "giteaadmin",
-			"--password", adminPass,
+			"--password-stdin",
 			"--email", "giteaadmin@local.fleet",
 			"--must-change-password=false",
-		).Run()
-		_ = CommandContext(ctx, "podman", "exec", infraForgejoContainer,
+		)
+		createLegacyAdminCmd.Stdin = strings.NewReader(adminPass + "\n")
+		_ = createLegacyAdminCmd.Run()
+		
+		changeLegacyPassCmd := CommandContext(ctx, "podman", "exec", "-i", infraForgejoContainer,
 			"forgejo", "admin", "user", "change-password",
 			"--username", "giteaadmin",
-			"--password", adminPass,
+			"--password-stdin",
 			"--must-change-password=false",
-		).Run()
+		)
+		changeLegacyPassCmd.Stdin = strings.NewReader(adminPass + "\n")
+		_ = changeLegacyPassCmd.Run()
 	}
 
 	// Ensure fleet organization and repos via API
@@ -1232,6 +1271,8 @@ func UpdateSSHConfig(ctx context.Context, paths config.Paths) error {
 
 // RecreateValkeyContainer stops, removes, and recreates the shared Valkey container with updated ACL and volume mounts.
 func RecreateValkeyContainer(ctx context.Context, paths config.Paths, adminPass, humanPass, humanName string) error {
+	_ = ensureEnvPasswords(paths, &adminPass, &humanPass)
+
 	netName := infraNetwork
 	if err := EnsureNetwork(ctx, netName); err != nil {
 		return fmt.Errorf("failed ensuring network %s: %w", netName, err)
@@ -1248,12 +1289,6 @@ func RecreateValkeyContainer(ctx context.Context, paths config.Paths, adminPass,
 	_ = os.MkdirAll(valkeyConfigDir, 0700)
 	aclFile := filepath.Join(valkeyConfigDir, "valkey-users.acl")
 
-	if adminPass == "" {
-		adminPass = "admin_backplane_pass"
-	}
-	if humanPass == "" {
-		humanPass = "human_backplane_pass"
-	}
 	if humanName == "" {
 		humanName = "operator"
 	}
