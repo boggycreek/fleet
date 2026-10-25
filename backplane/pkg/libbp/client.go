@@ -516,7 +516,7 @@ func (c *Client) Human(ctx context.Context, count int) ([]*Message, error) {
 			fieldMap[k] = v.String()
 		}
 		msg := MessageFromFields(id, fieldMap)
-		c.VerifyMessage(ctx, msg)
+		c.VerifyMessage(ctx, msg, true)
 		messages = append(messages, msg)
 	}
 	return messages, nil
@@ -793,10 +793,20 @@ func (c *Client) GetIdentity(ctx context.Context, id string) (*IdentityRecord, e
 	return rec, nil
 }
 
-// VerifyMessage verifies the cryptographic signature on a message
-func (c *Client) VerifyMessage(ctx context.Context, msg *Message) bool {
+// VerifyMessage verifies the cryptographic signature on a message.
+// If skipFreshness is true, timestamp freshness checks (5m future / 24h past) are bypassed.
+func (c *Client) VerifyMessage(ctx context.Context, msg *Message, skipFreshness ...bool) bool {
 	if msg == nil || !msg.IsSigned || msg.Signature == "" {
 		return false
+	}
+
+	skip := len(skipFreshness) > 0 && skipFreshness[0]
+	if !skip {
+		now := time.Now().UnixMilli()
+		diff := now - msg.Timestamp
+		if diff < -300000 || diff > 86400000 { // > 5 minutes in future or > 24 hours old
+			return false
+		}
 	}
 
 	sender := strings.ToLower(msg.Sender)

@@ -78,6 +78,7 @@ func TestMessageSerializationAndParsing(t *testing.T) {
 func TestSigningPayload(t *testing.T) {
 	msg := &Message{
 		Timestamp:   1700000000,
+		Seq:         42,
 		Sender:      "Agent-1",
 		Destination: "Agent-2",
 		ReplyTo:     "msg-0",
@@ -85,7 +86,7 @@ func TestSigningPayload(t *testing.T) {
 		BlobPath:    "blob-1",
 	}
 
-	expected := "1700000000\nagent-1\nagent-2\nmsg-0\npayload\nblob-1"
+	expected := "10:1700000000\n2:42\n7:agent-1\n7:agent-2\n5:msg-0\n7:payload\n6:blob-1"
 	if string(msg.SigningPayload()) != expected {
 		t.Errorf("got %q, expected %q", string(msg.SigningPayload()), expected)
 	}
