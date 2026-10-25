@@ -285,7 +285,7 @@ func checkAndHealValkeyContainer(ctx context.Context, paths config.Paths, report
 				aclArgs := []string{
 					"SETUSER", humanName, "on",
 					">" + humanPass,
-					"~*:%R~*:*", "&*", "+@all",
+					fmt.Sprintf("~%s:*", humanName), "%R~*:*", "&*", "+@all",
 				}
 				_, _ = clientRetry.Exec(ctx, "ACL", aclArgs...)
 
@@ -314,7 +314,7 @@ func checkAndHealValkeyContainer(ctx context.Context, paths config.Paths, report
 	aclArgs := []string{
 		"SETUSER", humanName, "on",
 		">" + humanPass,
-		"~*:%R~*:*", "&*", "+@all",
+		fmt.Sprintf("~%s:*", humanName), "%R~*:*", "&*", "+@all",
 	}
 	_, _ = client.Exec(ctx, "ACL", aclArgs...)
 
