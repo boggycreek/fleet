@@ -251,13 +251,13 @@ func TestCryptographicSigningIntegration(t *testing.T) {
 		t.Fatalf("agent-2 did not receive signed message")
 	}
 
-	if !agent2.VerifyMessage(ctx, targetMsg) {
+	if !agent2.VerifyMessage(ctx, targetMsg, false) {
 		t.Errorf("VerifyMessage failed to verify valid cryptographic signature")
 	}
 
 	// Tampered content test
 	targetMsg.Content = "Forged / altered instruction"
-	if agent2.VerifyMessage(ctx, targetMsg) {
+	if agent2.VerifyMessage(ctx, targetMsg, false) {
 		t.Errorf("SECURITY FAILURE: VerifyMessage verified tampered content")
 	}
 }

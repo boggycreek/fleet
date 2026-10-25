@@ -424,20 +424,20 @@ func TestClientOperations(t *testing.T) {
 	// 12. Verify message signature checks
 	for _, m := range recvMsgs {
 		if m.Sender == "agent-1" && m.IsSigned {
-			if !client.VerifyMessage(ctx, m) {
+			if !client.VerifyMessage(ctx, m, false) {
 				t.Errorf("failed verifying valid message signature: %+v", m)
 			}
 		}
 	}
 
 	// Verify nil / unsigned message cases
-	if client.VerifyMessage(ctx, nil) {
+	if client.VerifyMessage(ctx, nil, false) {
 		t.Errorf("expected false for nil message verification")
 	}
-	if client.VerifyMessage(ctx, &Message{}) {
+	if client.VerifyMessage(ctx, &Message{}, false) {
 		t.Errorf("expected false for unsigned message verification")
 	}
-	if client.VerifyMessage(ctx, &Message{Sender: "unknown-agent", IsSigned: true, Signature: "dGVzdA=="}) {
+	if client.VerifyMessage(ctx, &Message{Sender: "unknown-agent", IsSigned: true, Signature: "dGVzdA==", Timestamp: time.Now().UnixMilli()}, false) {
 		t.Errorf("expected false for unknown agent key verification")
 	}
 
@@ -641,13 +641,13 @@ func TestClientEdgeCases(t *testing.T) {
 		IsSigned:  true,
 	}
 	msg.Signature = SignPayload(priv, msg.SigningPayload())
-	if !client.VerifyMessage(ctx, msg) {
+	if !client.VerifyMessage(ctx, msg, false) {
 		t.Errorf("expected VerifyMessage to succeed for signed message")
 	}
 
 	// Corrupted signature
 	msg.Signature = "AAAA"
-	if client.VerifyMessage(ctx, msg) {
+	if client.VerifyMessage(ctx, msg, false) {
 		t.Errorf("expected VerifyMessage to fail for bad signature")
 	}
 }
@@ -776,5 +776,82 @@ func TestPeersEmpty(t *testing.T) {
 	}
 	if len(peers) != 0 {
 		t.Errorf("expected len(peers) == 0, got %d", len(peers))
+	}
+}
+
+func TestVerifyMessageSecurity(t *testing.T) {
+	srv, port := startMockValkeyServer(t)
+	defer srv.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-1"})
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	priv, pub, _ := GenerateKeypair()
+	pubB64 := EncodePublicKeyBase64(pub)
+	_ = client.RegisterIdentity(ctx, IdentityRecord{Name: "agent-sec", PubKey: pubB64})
+
+	baseMsg := func() *Message {
+		return &Message{
+			Sender:    "agent-sec",
+			Content:   "original",
+			Timestamp: time.Now().UnixMilli(),
+			Seq:       1,
+			IsSigned:  true,
+		}
+	}
+
+	// 1. Changing m.Seq invalidates the signature
+	msgSeq := baseMsg()
+	msgSeq.Signature = SignPayload(priv, msgSeq.SigningPayload())
+	if !client.VerifyMessage(ctx, msgSeq, false) {
+		t.Errorf("expected valid signature")
+	}
+	msgSeq.Seq = 2
+	if client.VerifyMessage(ctx, msgSeq, false) {
+		t.Errorf("changing Seq did not invalidate signature")
+	}
+
+	// 2. Newlines in Content cannot spoof adjacent fields
+	// E.g., someone tries to append fields in Content
+	msgSpoof := baseMsg()
+	msgSpoof.Content = "hello\n6:blob-2" // attempting to inject BlobPath
+	msgSpoof.Signature = SignPayload(priv, msgSpoof.SigningPayload())
+	if !client.VerifyMessage(ctx, msgSpoof, false) {
+		t.Errorf("expected valid signature on spoof attempt (since payload includes lengths)")
+	}
+	// Verify that parsing the payload back wouldn't treat the injected blob-2 as real, but since
+	// we just test VerifyMessage here, it's sufficient to show lengths prevent ambiguity.
+	// We check if altering the BlobPath while keeping Content the same breaks the signature.
+	msgSpoof.Content = "hello"
+	msgSpoof.BlobPath = "blob-2"
+	if client.VerifyMessage(ctx, msgSpoof, false) {
+		t.Errorf("expected signature to fail when fields are shifted")
+	}
+
+	// 3. Stale or future timestamps are rejected by VerifyMessage
+	msgFuture := baseMsg()
+	msgFuture.Timestamp = time.Now().UnixMilli() + 600000 // +10 mins
+	msgFuture.Signature = SignPayload(priv, msgFuture.SigningPayload())
+	if client.VerifyMessage(ctx, msgFuture, false) {
+		t.Errorf("expected future timestamp to be rejected")
+	}
+	if !client.VerifyMessage(ctx, msgFuture, true) { // skipFreshness = true
+		t.Errorf("expected future timestamp to be accepted when skipFreshness is true")
+	}
+
+	msgStale := baseMsg()
+	msgStale.Timestamp = time.Now().UnixMilli() - 90000000 // > 24 hours
+	msgStale.Signature = SignPayload(priv, msgStale.SigningPayload())
+	if client.VerifyMessage(ctx, msgStale, false) {
+		t.Errorf("expected stale timestamp to be rejected")
+	}
+	if !client.VerifyMessage(ctx, msgStale, true) { // skipFreshness = true
+		t.Errorf("expected stale timestamp to be accepted when skipFreshness is true")
 	}
 }

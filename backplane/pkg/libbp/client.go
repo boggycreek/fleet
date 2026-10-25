@@ -516,7 +516,7 @@ func (c *Client) Human(ctx context.Context, count int) ([]*Message, error) {
 			fieldMap[k] = v.String()
 		}
 		msg := MessageFromFields(id, fieldMap)
-		c.VerifyMessage(ctx, msg)
+		c.VerifyMessage(ctx, msg, true)
 		messages = append(messages, msg)
 	}
 	return messages, nil
@@ -794,9 +794,17 @@ func (c *Client) GetIdentity(ctx context.Context, id string) (*IdentityRecord, e
 }
 
 // VerifyMessage verifies the cryptographic signature on a message
-func (c *Client) VerifyMessage(ctx context.Context, msg *Message) bool {
+func (c *Client) VerifyMessage(ctx context.Context, msg *Message, skipFreshness bool) bool {
 	if msg == nil || !msg.IsSigned || msg.Signature == "" {
 		return false
+	}
+
+	if !skipFreshness {
+		now := time.Now().UnixMilli()
+		diff := now - msg.Timestamp
+		if diff < -300000 || diff > 86400000 { // > 5 minutes in future or > 24 hours old
+			return false
+		}
 	}
 
 	sender := strings.ToLower(msg.Sender)
@@ -860,7 +868,7 @@ func (c *Client) parseXReadResponse(ctx context.Context, val resp.Value) ([]*Mes
 			}
 
 			msg := MessageFromFields(msgID, fieldMap)
-			c.VerifyMessage(ctx, msg)
+			c.VerifyMessage(ctx, msg, false)
 			messages = append(messages, msg)
 			lastID = msgID
 		}
