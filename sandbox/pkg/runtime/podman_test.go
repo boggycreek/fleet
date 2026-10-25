@@ -466,3 +466,57 @@ func TestStartHostAgentContainer(t *testing.T) {
 		t.Errorf("expected workspace mount in run command, got: %s", runCmd)
 	}
 }
+
+func TestValkeyACLPermissions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tmpDir, err := os.MkdirTemp("", "valkey-acl-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	paths := config.Paths{
+		DataHome: tmpDir,
+	}
+
+	// We test StartInfraStack's permission logic. It creates the config dir and file.
+	// We pass empty strings to trigger defaults, and it should fail on podman not found or something,
+	// but the directory and file should be created first before it tries to spawn podman containers.
+	// (Actually StartInfraStack is in StartInfraStack function and EnsureInfra but we can test RecreateValkeyContainer which is smaller)
+
+	// Since EnsureNetwork requires podman and might fail before writing the file if podman doesn't exist,
+	// it's better to test StartInfraStack which creates the network *before* the file. Wait, both create network first.
+	// If podman is not installed, it will error out before creating the file.
+	// Let's just create a dummy podman executable in path to bypass this if podman is not installed.
+
+	// Create dummy podman
+	dummyPodman := filepath.Join(tmpDir, "podman")
+	_ = os.WriteFile(dummyPodman, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_ = RecreateValkeyContainer(ctx, paths, "admin", "human", "operator")
+
+	valkeyConfigDir := filepath.Join(paths.DataHome, "valkey")
+	aclFile := filepath.Join(valkeyConfigDir, "valkey-users.acl")
+
+	dirInfo, err := os.Stat(valkeyConfigDir)
+	if err != nil {
+		t.Fatalf("failed to stat valkey config dir: %v", err)
+	}
+	if dirInfo.Mode().Perm() != 0700 {
+		t.Errorf("expected valkey config dir to have permissions 0700, got %04o", dirInfo.Mode().Perm())
+	}
+
+	fileInfo, err := os.Stat(aclFile)
+	if err != nil {
+		t.Fatalf("failed to stat valkey users acl file: %v", err)
+	}
+	if fileInfo.Mode().Perm() != 0600 {
+		t.Errorf("expected valkey users acl file to have permissions 0600, got %04o", fileInfo.Mode().Perm())
+	}
+}

@@ -127,14 +127,14 @@ func (h *EphemeralInfraHarness) startContainers() {
 
 	// 3. Write Valkey ACL file
 	valkeyConfigDir := filepath.Join(h.DataHome, "valkey")
-	_ = os.MkdirAll(valkeyConfigDir, 0755)
+	_ = os.MkdirAll(valkeyConfigDir, 0700)
 	aclFile := filepath.Join(valkeyConfigDir, "valkey-users.acl")
 
 	aclContent := fmt.Sprintf(`user default off
 user admin on >%s ~* &* +@all
 user %s on >%s ~%s:* ~human:name ~liaison:current ~identity:* %%R~*:* &* +@all (+xadd ~*:inbox)
 `, h.AdminPassword, h.HumanName, h.HumanPassword, h.HumanName)
-	if err := os.WriteFile(aclFile, []byte(aclContent), 0644); err != nil {
+	if err := os.WriteFile(aclFile, []byte(aclContent), 0600); err != nil {
 		h.t.Fatalf("failed writing test valkey ACL file: %v", err)
 	}
 
