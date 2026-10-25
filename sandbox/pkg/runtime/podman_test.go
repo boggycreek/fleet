@@ -8,6 +8,8 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -545,5 +547,36 @@ func TestValkeyACLPermissions(t *testing.T) {
 	}
 	if fileInfo.Mode().Perm() != 0600 {
 		t.Errorf("expected valkey users acl file to have permissions 0600, got %04o", fileInfo.Mode().Perm())
+	}
+}
+
+func TestBootstrapForgejo_NoPasswordInArgv(t *testing.T) {
+	var argvList [][]string
+	mockRun := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		argvList = append(argvList, args)
+		return exec.Command("true")
+	}
+	restore := SetExecCommandContextForTesting(mockRun)
+	defer restore()
+
+	// Start a dummy HTTP server to satisfy the version check
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	os.Setenv("FORGEJO_URL", ts.URL)
+	defer os.Unsetenv("FORGEJO_URL")
+
+	err := BootstrapForgejo(context.Background(), "mysecretpass123")
+	if err != nil {
+		t.Fatalf("BootstrapForgejo failed: %v", err)
+	}
+
+	for _, args := range argvList {
+		for _, arg := range args {
+			if strings.Contains(arg, "mysecretpass123") {
+				t.Errorf("found admin password exposed in argv: %v", args)
+			}
+		}
 	}
 }
