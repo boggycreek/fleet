@@ -467,6 +467,46 @@ func TestStartHostAgentContainer(t *testing.T) {
 	}
 }
 
+func TestStartAgentContainerSecrets(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var runArgs []string
+	restoreMock := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			if name == "podman" && len(args) > 0 && args[0] == "container" && args[1] == "exists" {
+				return exec.Command("false")
+			}
+		if name == "podman" && len(args) > 0 && args[0] == "run" {
+			runArgs = args
+		}
+		return exec.Command("true")
+	})
+	defer restoreMock()
+
+	cfg := &config.AgentConfig{
+		Name:          "secret-agent",
+		ContainerName: "fleet-agent-secret-agent",
+		Password:      "supersecret-password",
+		SigningKeyPEM: "supersecret-pem",
+		ModelAPIKey:   "supersecret-openai",
+	}
+
+	err := StartAgentContainer(ctx, cfg, config.Paths{}, "127.0.0.1", 6379)
+	if err != nil {
+		t.Fatalf("StartAgentContainer failed: %v", err)
+	}
+
+	if len(runArgs) == 0 {
+		t.Fatalf("expected podman run to be called")
+	}
+
+	for _, arg := range runArgs {
+		if strings.Contains(arg, "supersecret") {
+			t.Errorf("secret leaked in argv: %s", arg)
+		}
+	}
+}
+
 func TestValkeyACLPermissions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
