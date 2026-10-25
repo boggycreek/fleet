@@ -18,6 +18,7 @@ import (
 
 	"github.com/boggycreek/sandbox/backplane/test/harness"
 	"github.com/boggycreek/sandbox/pkg/config"
+	"github.com/boggycreek/sandbox/pkg/runtime"
 )
 
 func TestProvisionAgentAndDeprovisionAgentHappyPath(t *testing.T) {
@@ -152,6 +153,13 @@ func TestProvisionAgentAndDeprovisionAgentOfflineServices(t *testing.T) {
 		SSHConfigFile: filepath.Join(tmpDir, "ssh", "config"),
 	}
 	_ = paths.EnsureDirectories()
+
+	// Inject a mock command executor so that podman calls succeed without an actual container runtime.
+	mockExec := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		// Just run a no-op command
+		return exec.CommandContext(ctx, "true")
+	}
+	defer runtime.SetDefaultExecutor(runtime.CommandExecutorFunc(mockExec))()
 
 	// Direct ports to offline addresses
 	t.Setenv("BP_HOST", "127.0.0.1")
