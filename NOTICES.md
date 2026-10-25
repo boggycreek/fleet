@@ -1,6 +1,6 @@
 # Third-Party Software Notices and Licenses
 
-This file contains legal notices, copyright statements, and license texts for third-party open-source software utilized by, packaged with, or orchestrated by **Agent Sandbox** (developed by **Boggy Creek Software LLC**).
+This file contains legal notices, copyright statements, and license texts for third-party open-source software utilized by, packaged with, or orchestrated by **Fleet** (developed by **Boggy Creek Software LLC**).
 
 ---
 
@@ -12,9 +12,11 @@ This file contains legal notices, copyright statements, and license texts for th
 | **Podman** | Red Hat, Inc. & Containers Community | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) | Rootless Container Runtime |
 | **Conmon** | Red Hat, Inc. & Containers Community | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) | OCI Container Monitor |
 | **Valkey** | Linux Foundation & Valkey Contributors | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) | Shared In-Memory Streaming Bus |
-| **Gitea** | The Gitea Authors | [MIT](https://spdx.org/licenses/MIT.html) | Local Git Forge & REST API Server |
+| **Forgejo** | Forgejo Authors & Codeberg e.V. | [MIT](https://spdx.org/licenses/MIT.html) | Local Git Forge & REST API Server |
+| **Gitea** | The Gitea Authors | [MIT](https://spdx.org/licenses/MIT.html) | Legacy Git Forge Compatibility |
 | **PostgreSQL** | PostgreSQL Global Development Group | [PostgreSQL](https://spdx.org/licenses/PostgreSQL.html) | Shared Relational Database Backend |
 | **SonarQube Community Build** | SonarSource S.A. | [LGPL-3.0-only](https://spdx.org/licenses/LGPL-3.0-only.html) | Automated Code Quality Inspection |
+| **Eclipse Temurin OpenJDK** | Eclipse Adoptium / Eclipse Foundation | [GPL-2.0-with-classpath-exception](https://spdx.org/licenses/GPL-2.0-with-classpath-exception.html) | OpenJDK Java Runtime Environment |
 | **Beads (`bd`)** | Gas Town Hall / Steve Yegge | [MIT](https://spdx.org/licenses/MIT.html) | Graph-Based Task Backlog Tracker |
 | **Dolt** | DoltHub, Inc. | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) | Version-Controlled Database Engine |
 | **tmux** | Nicholas Marriott | [ISC](https://spdx.org/licenses/ISC.html) | In-Container Terminal Multiplexer |
@@ -94,7 +96,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
-### 3. Gitea, Beads & Deno (MIT License)
+### 3. Forgejo, Gitea, Beads & Deno (MIT License)
+**Copyright (c) 2022-2026 The Forgejo Authors**
 **Copyright (c) 2016-2026 The Gitea Authors**  
 **Copyright (c) 2025-2026 Gas Town Hall**  
 **Copyright (c) 2018-2026 the Deno authors**
@@ -172,3 +175,21 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+---
+
+### 7. GNU General Public License, Version 2 with Classpath Exception (Eclipse Temurin OpenJDK)
+**Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.**
+**Eclipse Temurin is a trademark of the Eclipse Foundation.**
+
+The GNU General Public License (GPL) Version 2, June 1991
+
+Copyright (C) 1989, 1991 Free Software Foundation, Inc.
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+Everyone is permitted to copy and distribute verbatim copies of this license document, but changing it is not allowed.
+
+#### Classpath Exception
+Linking this library statically or dynamically with other modules is making a combined work based on this library. Thus, the terms and conditions of the GNU General Public License cover the whole combination.
+
+As a special exception, the copyright holders of this library give you permission to link this library with independent modules to produce an executable, regardless of the license terms of these independent modules, and to copy and distribute the resulting executable under terms of your choice, provided that you also meet, for each linked independent module, the terms and conditions of the license of that module. An independent module is a module which is not derived from or based on this library. If you modify this library, you may extend this exception to your version of the library, but you are not obligated to do so. If you do not wish to do so, delete this exception statement from your version.
