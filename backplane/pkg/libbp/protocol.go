@@ -74,13 +74,19 @@ type Peer struct {
 
 // SigningPayload generates the canonical byte slice for signing & verification
 func (m *Message) SigningPayload() []byte {
-	return []byte(fmt.Sprintf("%d\n%s\n%s\n%s\n%s\n%s",
-		m.Timestamp,
-		strings.ToLower(m.Sender),
-		strings.ToLower(m.Destination),
-		m.ReplyTo,
-		m.Content,
-		m.BlobPath,
+	tsStr := strconv.FormatInt(m.Timestamp, 10)
+	seqStr := strconv.FormatInt(m.Seq, 10)
+	senderStr := strings.ToLower(m.Sender)
+	destStr := strings.ToLower(m.Destination)
+
+	return []byte(fmt.Sprintf("%d:%s\n%d:%s\n%d:%s\n%d:%s\n%d:%s\n%d:%s\n%d:%s",
+		len(tsStr), tsStr,
+		len(seqStr), seqStr,
+		len(senderStr), senderStr,
+		len(destStr), destStr,
+		len(m.ReplyTo), m.ReplyTo,
+		len(m.Content), m.Content,
+		len(m.BlobPath), m.BlobPath,
 	))
 }
 
