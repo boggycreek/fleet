@@ -405,16 +405,27 @@ func TestValkeyGatewaySignatureVerification(t *testing.T) {
 		IsSigned:  true,
 	})
 
-	// 2. Signed message with valid signature -> accepted
-	validContent := "good message"
-	validSig := libbp.SignPayload(priv, []byte(validContent))
+	// 2. Signed message over raw content alone -> rejected
+	rawContent := "raw content only"
+	rawSig := libbp.SignPayload(priv, []byte(rawContent))
 	client.push(&libbp.Message{
-		ID:        "m-good",
+		ID:        "m-raw-sig",
 		Sender:    "trusted-peer",
-		Content:   validContent,
-		Signature: validSig,
+		Content:   rawContent,
+		Signature: rawSig,
 		IsSigned:  true,
 	})
+
+	// 3. Signed message with valid envelope signature -> accepted
+	validMsg := &libbp.Message{
+		ID:        "m-good",
+		Sender:    "trusted-peer",
+		Content:   "good message",
+		IsSigned:  true,
+	}
+	validSig := libbp.SignPayload(priv, validMsg.SigningPayload())
+	validMsg.Signature = validSig
+	client.push(validMsg)
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -430,10 +441,19 @@ func TestValkeyGatewaySignatureVerification(t *testing.T) {
 		t.Fatalf("expected verifier warning event for bad sig, got: %+v", e1)
 	}
 
-	// Third event should be the good message
+	// Third event should be warning for raw content signature
 	e2, ok := bus.Poll()
-	if !ok || e2.Source != "valkey:inbox" {
-		t.Fatalf("expected inbox message event, got: %+v", e2)
+	if !ok || e2.Source != "gateway:verifier" {
+		t.Fatalf("expected verifier warning event for raw content sig, got: %+v", e2)
+	}
+	if warn, ok := e2.Payload.(map[string]any)["warning"].(string); !ok || warn != "rejected unverified message signature" {
+		t.Fatalf("unexpected warning message for raw content sig: %v", e2.Payload)
+	}
+
+	// Fourth event should be the good message
+	e3, ok := bus.Poll()
+	if !ok || e3.Source != "valkey:inbox" {
+		t.Fatalf("expected inbox message event, got: %+v", e3)
 	}
 }
 
