@@ -19,6 +19,7 @@ import (
 )
 
 func TestFleetCmdCoverageExtensions(t *testing.T) {
+	t.Setenv("SONAR_DISABLED", "1")
 	tmpDir := t.TempDir()
 	t.Cleanup(func() {
 		_ = exec.Command("podman", "unshare", "rm", "-rf", tmpDir).Run()

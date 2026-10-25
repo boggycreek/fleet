@@ -677,6 +677,7 @@ func TestAgentCloneAndRemote(t *testing.T) {
 }
 
 func TestHostContainerLifecycleAndWorkspaceProjection(t *testing.T) {
+	t.Setenv("SONAR_DISABLED", "1")
 	tmpDir := t.TempDir()
 	t.Cleanup(func() {
 		_ = exec.Command("podman", "unshare", "rm", "-rf", tmpDir).Run()
@@ -724,7 +725,7 @@ func TestHostContainerLifecycleAndWorkspaceProjection(t *testing.T) {
 	}
 
 	// 3. Create host-connected container agent with --host and --pwd
-	code, out, errOut := runFleet([]string{"agent", "create", "host-coder", "as", "tool", "--host", "--pwd", wsDir, "--role", "interactive-pair"})
+	code, out, errOut := runFleet([]string{"agent", "create", "host-coder", "as", "tool", "--host", "--pwd", wsDir, "--role", "interactive-pair", "--model-url", "http://localhost:11434/v1"})
 	if code != 0 {
 		t.Fatalf("agent create --host failed: code=%d err=%s out=%s", code, errOut, out)
 	}

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -350,12 +351,23 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 		containerBPHost = infraValkeyContainer
 	}
 
+	isLocalModelURL := func(murl string) bool {
+		if murl == "" {
+			return false
+		}
+		u, err := url.Parse(murl)
+		if err != nil {
+			return false
+		}
+		host := u.Hostname()
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	}
+
 	args := []string{
 		"run", "-d",
 		"--name", cfg.ContainerName,
 		"--hostname", fmt.Sprintf("%s-sandbox", cfg.Name),
 		"--network", netName,
-		"--add-host", "llm-gateway:host-gateway",
 		"-p", "127.0.0.1::2222",
 		"-e", fmt.Sprintf("AGENT_NAME=%s", cfg.Name),
 		"-e", fmt.Sprintf("AGENT_ROLE=%s", cfg.Role),
@@ -367,6 +379,10 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 		"-e", "BP_SIGNING_KEY_PEM",
 		"-e", fmt.Sprintf("VALKEY_ADDR=%s:%d", containerBPHost, bpPort),
 		"-e", "VALKEY_PASSWORD",
+	}
+
+	if isLocalModelURL(cfg.ModelURL) {
+		args = append(args, "--add-host", "llm-gateway:host-gateway")
 	}
 
 	extraEnv := []string{
@@ -490,13 +506,24 @@ func startHostAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths
 		containerBPHost = infraValkeyContainer
 	}
 
+	isLocalModelURL := func(murl string) bool {
+		if murl == "" {
+			return false
+		}
+		u, err := url.Parse(murl)
+		if err != nil {
+			return false
+		}
+		host := u.Hostname()
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	}
+
 	args := []string{
 		"run", "-d", "-i", "-t",
 		"--name", cfg.ContainerName,
 		"--hostname", fmt.Sprintf("%s-sandbox", cfg.Name),
 		"--network", netName,
 		"-p", "127.0.0.1::2222",
-		"--add-host", "llm-gateway:host-gateway",
 		"--userns=keep-id:uid=1000,gid=1000",
 		"-e", fmt.Sprintf("AGENT_NAME=%s", cfg.Name),
 		"-e", fmt.Sprintf("AGENT_ROLE=%s", cfg.Role),
@@ -508,6 +535,10 @@ func startHostAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths
 		"-e", "BP_SIGNING_KEY_PEM",
 		"-e", fmt.Sprintf("VALKEY_ADDR=%s:%d", containerBPHost, bpPort),
 		"-e", "VALKEY_PASSWORD",
+	}
+
+	if isLocalModelURL(cfg.ModelURL) {
+		args = append(args, "--add-host", "llm-gateway:host-gateway")
 	}
 
 	extraEnv := []string{

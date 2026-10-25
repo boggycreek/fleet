@@ -148,14 +148,7 @@ func DeprovisionAgent(ctx context.Context, cfg *config.AgentConfig, paths config
 		report.AddStep("Container & Volume", StatusOK, fmt.Sprintf("Removed container (%s) and volume (%s)", cfg.ContainerName, cfg.VolumeName), nil)
 	}
 
-	// 2. Delete local config and secrets
-	if err := config.DeleteAgentConfig(cfg.Name, paths); err != nil {
-		report.AddStep("Local Configuration", StatusError, fmt.Sprintf("Failed to delete local configuration: %v", err), err)
-	} else {
-		report.AddStep("Local Configuration", StatusOK, "Purged local configuration, secrets, and profile", nil)
-	}
-
-	// 3. Clear per-agent known hosts
+	// 2. Clear per-agent known hosts
 	if cfg.IsNoContainer() {
 		report.AddStep("Known Hosts", StatusSkipped, "No-container agent has no SSH host entry (skipped)", nil)
 	} else {
@@ -163,7 +156,7 @@ func DeprovisionAgent(ctx context.Context, cfg *config.AgentConfig, paths config
 		report.AddStep("Known Hosts", StatusOK, "Cleared agent SSH known hosts entry", nil)
 	}
 
-	// 4. Deprovision Valkey ACL user & streams
+	// 3. Deprovision Valkey ACL user & streams
 	if err := DeprovisionValkeyUser(ctx, cfg.Name); err == nil {
 		report.AddStep("Valkey Identity", StatusOK, "Removed Valkey ACL user and backplane identity", nil)
 	} else if IsOfflineError(err) {
@@ -172,7 +165,7 @@ func DeprovisionAgent(ctx context.Context, cfg *config.AgentConfig, paths config
 		report.AddStep("Valkey Identity", StatusError, fmt.Sprintf("Failed to remove Valkey identity: %v", err), err)
 	}
 
-	// 5. Deprovision Forgejo user & keys
+	// 4. Deprovision Forgejo user & keys
 	if cfg.IsNoContainer() {
 		report.AddStep("Forgejo Account", StatusSkipped, "No-container agent has no Forgejo account (skipped)", nil)
 	} else if os.Getenv("FORGEJO_DISABLED") == "1" || os.Getenv("GITEA_DISABLED") == "1" {
@@ -185,7 +178,7 @@ func DeprovisionAgent(ctx context.Context, cfg *config.AgentConfig, paths config
 		report.AddStep("Forgejo Account", StatusError, fmt.Sprintf("Failed to purge Forgejo user: %v", err), err)
 	}
 
-	// 6. Deprovision SonarQube user & analysis tokens
+	// 5. Deprovision SonarQube user & analysis tokens
 	if cfg.IsNoContainer() {
 		report.AddStep("SonarQube Account", StatusSkipped, "No-container agent has no SonarQube account (skipped)", nil)
 	} else if os.Getenv("SONAR_DISABLED") == "1" || (cfg.SonarToken == "" && os.Getenv("SONAR_HOST_URL") == "") {
@@ -198,13 +191,20 @@ func DeprovisionAgent(ctx context.Context, cfg *config.AgentConfig, paths config
 		report.AddStep("SonarQube Account", StatusError, fmt.Sprintf("Failed to deprovision SonarQube user: %v", err), err)
 	}
 
-	// 7. Update SSH config file
+	// 6. Update SSH config file
 	if cfg.IsNoContainer() {
 		report.AddStep("SSH Configuration", StatusSkipped, "No-container agent has no SSH config stanza (skipped)", nil)
 	} else if err := runtime.SyncSSHConfigFile(ctx, paths); err != nil {
 		report.AddStep("SSH Configuration", StatusWarning, fmt.Sprintf("Failed to synchronize SSH config: %v", err), err)
 	} else {
 		report.AddStep("SSH Configuration", StatusOK, "Synchronized host SSH config", nil)
+	}
+
+	// 7. Delete local config and secrets (Done last so config remains if other steps fail and we need to retry)
+	if err := config.DeleteAgentConfig(cfg.Name, paths); err != nil {
+		report.AddStep("Local Configuration", StatusError, fmt.Sprintf("Failed to delete local configuration: %v", err), err)
+	} else {
+		report.AddStep("Local Configuration", StatusOK, "Purged local configuration, secrets, and profile", nil)
 	}
 
 	return report
