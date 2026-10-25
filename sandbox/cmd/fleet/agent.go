@@ -373,7 +373,9 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 		fmt.Fprint(stdout, formatted)
 	}
 	if report.HasErrors() {
-		fmt.Fprintf(stderr, "%s warning: agent %q provisioned with errors; run '%s agent doctor %s' to diagnose\n", bin, cfg.Name, bin, cfg.Name)
+		fmt.Fprintf(stderr, "%s error: agent %q provisioned with errors; rolling back partial state\n", bin, cfg.Name)
+		_ = lifecycle.DeprovisionAgent(ctx, cfg, paths)
+		return 1
 	}
 	if cfg.IsNoContainer() {
 		fmt.Fprintf(stdout, "To use:   bp --profile %s tell <recipient> <msg>\n", cfg.Name)
@@ -893,12 +895,20 @@ func handleAgentRetire(ctx context.Context, paths config.Paths, args []string, s
 		fmt.Fprintf(stderr, "Usage: %s agent retire <name> [--force]\n", bin)
 		return 1
 	}
-	_ = force // Flag parsed and supported for scripts/automation
-
 	cfg, err := config.LoadAgentConfig(name, paths)
 	if err != nil {
-		fmt.Fprintf(stderr, "%s error: %v\n", bin, err)
-		return 1
+		if force {
+			// If forcing, synthesize a minimal config so deprovisioning proceeds
+			cfg = &config.AgentConfig{
+				Name:          name,
+				ContainerName: fmt.Sprintf("fleet-agent-%s", name),
+				VolumeName:    fmt.Sprintf("fleet-agent-%s-home", name),
+			}
+			fmt.Fprintf(stderr, "%s warning: agent %q config not found, proceeding with forced cleanup\n", bin, name)
+		} else {
+			fmt.Fprintf(stderr, "%s error: %v\n", bin, err)
+			return 1
+		}
 	}
 
 	report := lifecycle.DeprovisionAgent(ctx, cfg, paths)
@@ -911,6 +921,9 @@ func handleAgentRetire(ctx context.Context, paths config.Paths, args []string, s
 	fmt.Fprint(stdout, lifecycle.FormatReport(report))
 	if report.HasErrors() {
 		fmt.Fprintf(stderr, "%s warning: agent %q deprovisioned with errors\n", bin, name)
+		if !force {
+			return 1
+		}
 	}
 	return 0
 }

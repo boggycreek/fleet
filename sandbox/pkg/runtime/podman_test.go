@@ -614,3 +614,72 @@ func TestEnsureEnvPasswords(t *testing.T) {
 		t.Errorf("expected .env to contain generated passwords, got:\n%s", content)
 	}
 }
+
+func TestStartAgentContainer_ModelURLAddHost(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	testCases := []struct {
+		name         string
+		modelURL     string
+		expectAddHost bool
+		isHost       bool
+	}{
+		{"Empty URL", "", false, false},
+		{"External HTTPS URL", "https://api.openai.com/v1", false, false},
+		{"Localhost HTTP URL", "http://localhost:11434/v1", true, false},
+		{"Local IP HTTP URL", "http://127.0.0.1:11434/v1", true, false},
+		{"Local IPv6 HTTP URL", "http://[::1]:11434/v1", true, false},
+		{"Empty URL Host", "", false, true},
+		{"External HTTPS URL Host", "https://api.openai.com/v1", false, true},
+		{"Localhost HTTP URL Host", "http://localhost:11434/v1", true, true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var runArgs []string
+			restoreMock := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				if name == "podman" && len(args) > 0 && args[0] == "container" && args[1] == "exists" {
+					return exec.Command("false")
+				}
+				if name == "podman" && len(args) > 0 && args[0] == "run" {
+					runArgs = args
+				}
+				return exec.Command("true")
+			})
+			defer restoreMock()
+
+			tmpDir := t.TempDir()
+			wsDir := filepath.Join(tmpDir, "workspace")
+			_ = os.MkdirAll(wsDir, 0755)
+
+			cfg := &config.AgentConfig{
+				Name:          "test-agent",
+				ContainerName: "test-container",
+				ModelURL:      tc.modelURL,
+			}
+			if tc.isHost {
+				cfg.Runtime = "host-container"
+				cfg.WorkspacePath = wsDir
+			}
+
+			err := StartAgentContainer(ctx, cfg, config.Paths{}, "127.0.0.1", 6379)
+			if err != nil {
+				t.Fatalf("StartAgentContainer failed: %v", err)
+			}
+
+			hasAddHost := false
+			for i, arg := range runArgs {
+				if arg == "--add-host" && i+1 < len(runArgs) && runArgs[i+1] == "llm-gateway:host-gateway" {
+					hasAddHost = true
+					break
+				}
+			}
+
+			if hasAddHost != tc.expectAddHost {
+				t.Errorf("expected --add-host presence to be %v, got %v for ModelURL %q (isHost: %v)\nargs: %v",
+					tc.expectAddHost, hasAddHost, tc.modelURL, tc.isHost, runArgs)
+			}
+		})
+	}
+}

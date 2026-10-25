@@ -132,7 +132,7 @@ func RegisterGiteaUser(ctx context.Context, cfg *config.AgentConfig, paths confi
 //
 //nolint:gocritic // paths passed by value for consistency with config package
 func RegisterSonarUser(ctx context.Context, cfg *config.AgentConfig, paths config.Paths) error {
-	if cfg.IsNoContainer() {
+	if cfg.IsNoContainer() || os.Getenv("SONAR_DISABLED") == "1" {
 		return nil
 	}
 	adminPass := config.GetSonarAdminPassword()

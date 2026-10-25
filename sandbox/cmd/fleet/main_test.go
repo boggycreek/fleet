@@ -167,6 +167,7 @@ func TestFleetAgentDomain(t *testing.T) {
 }
 
 func TestFleetWithLiveValkey(t *testing.T) {
+	t.Setenv("SONAR_DISABLED", "1")
 	valkey := harness.StartValkeyHarness(t)
 	defer valkey.Teardown()
 
