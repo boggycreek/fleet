@@ -1,12 +1,12 @@
 # Acknowledgements & Open Source Credits
 
-The **Agent Sandbox** platform is developed by **Boggy Creek Software LLC**. We believe deeply in the open-source ethos and acknowledge that this project is made possible by the incredible work of open-source software creators, maintainers, foundations, and communities worldwide.
+The **Fleet** platform is developed by **Boggy Creek Software LLC**. We believe deeply in the open-source ethos and acknowledge that this project is made possible by the incredible work of open-source software creators, maintainers, foundations, and communities worldwide.
 
 ---
 
 ## Zero-Dependency Core Architecture
 
-The native binaries across the workspace (`fleet`, `bp`, `bpd`, `bp-mcp`, `gitea-mcp`, `beads-mcp`, `sonar-mcp`) and internal Go libraries (`sandbox/pkg/...`, `backplane/pkg/...`, `mcp/pkg/...`) are engineered intentionally with **zero external Go module dependencies**. We build exclusively on the standard library of the **Go Programming Language**, maintained by the Go Authors and Google:
+The native binaries across the workspace (`fleet`, `bp`, `bpd`, `bp-mcp`, `forgejo-mcp`, `gitea-mcp`, `beads-mcp`, `sonar-mcp`) and internal Go libraries (`sandbox/pkg/...`, `backplane/pkg/...`, `mcp/pkg/...`) are engineered intentionally with **zero external Go module dependencies**. We build exclusively on the standard library of the **Go Programming Language**, maintained by the Go Authors and Google:
 
 - **[The Go Programming Language](https://go.dev/)** — BSD-3-Clause License  
   *Provided the robust concurrency model, cryptographic primitives (`crypto/ed25519`), networking, and tooling enabling reliable, cross-platform static binaries.*
@@ -15,9 +15,9 @@ The native binaries across the workspace (`fleet`, `bp`, `bpd`, `bp-mcp`, `gitea
 
 ## Foundational Open Source Projects & Communities
 
-We express our sincere gratitude to the following open-source projects, tools, and platforms that form the pillars of Agent Sandbox:
+We express our sincere gratitude to the following open-source projects, tools, and platforms that form the pillars of Fleet:
 
-### 1. Container Runtime & Process Isolation
+### 1. Container Runtime, Java Environment & Process Isolation
 - **[Podman](https://podman.io/)** (Red Hat / Containers Community) — Apache-2.0 License  
   *Provides daemonless, rootless OCI container orchestration, unprivileged user namespaces (`subuid`/`subgid`), and secure container perimeter enforcement without requiring a host daemon.*
 - **[Conmon & crun](https://github.com/containers)** (Containers Community / Red Hat) — Apache-2.0 & GPL-2.0 Licenses  
@@ -26,12 +26,16 @@ We express our sincere gratitude to the following open-source projects, tools, a
   *Serves as the solid, predictable base operating system layer for our `agent-sandbox-base` container image (`images/agent-base`).*
 - **[Deno](https://deno.land/)** (Deno Land Inc. / The Deno Authors) — MIT License  
   *Modern, secure JavaScript and TypeScript runtime bundled into the base agent image for headless automation.*
+- **[Eclipse Temurin OpenJDK](https://adoptium.net/)** (Eclipse Adoptium / Eclipse Foundation) — GPL-2.0-with-classpath-exception License
+  *Provides the OpenJDK Java runtime environment powering the SonarQube Community Build image (`images/infra/sonarqube`).*
 
 ### 2. High-Performance Messaging & Shared Infrastructure
 - **[Valkey](https://valkey.io/)** (Linux Foundation / Valkey Community) — BSD-3-Clause License  
   *Powers our high-performance, real-time agent backplane bus (`bp`), Valkey Streams, pub/sub channels, and granular per-agent ACL security boundaries.*
+- **[Forgejo](https://forgejo.org/)** (Forgejo Authors / Codeberg e.V.) — MIT License
+  *Provides lightweight, community-governed self-hosted Git repository hosting, forge REST APIs, and automated SSH key management for local multi-agent codebases.*
 - **[Gitea](https://about.gitea.com/)** (Gitea Authors / Community) — MIT License  
-  *Provides lightweight, self-hosted Git repository hosting, forge REST APIs, and automated SSH key management for local multi-agent codebases.*
+  *Provides lightweight self-hosted Git forge capabilities and backward compatibility.*
 - **[PostgreSQL](https://www.postgresql.org/)** (The PostgreSQL Global Development Group) — PostgreSQL License  
   *Provides industrial-grade relational database storage for shared infrastructure services.*
 - **[SonarQube Community Build](https://www.sonarsource.com/products/sonarqube/)** (SonarSource) — LGPL-3.0 License  
@@ -75,4 +79,4 @@ We express our sincere gratitude to the following open-source projects, tools, a
 
 ## Legal Notices & Third-Party Licenses
 
-For formal legal copyright notices, SPDX license identifiers, and redistributable third-party license texts, please consult **[NOTICES.md](file:///home/brian/Workspaces/boggycreek/sandbox/NOTICES.md)**.
+For formal legal copyright notices, SPDX license identifiers, and redistributable third-party license texts, please consult **[NOTICES.md](NOTICES.md)**.
