@@ -192,7 +192,7 @@ Commands:
 func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, stdout, stderr io.Writer) int {
 	bin := binaryName()
 	if len(args) == 0 {
-		fmt.Fprintf(stderr, "Usage: %s agent create <name> [as <type|oci>] [--image <type|oci>] [--role <role>] [--host] [--no-container] [--pwd <path>] [--model-url <url>] [--model-name <name>] [--model-key <key>]\n", bin)
+		fmt.Fprintf(stderr, "Usage: %s agent create <name> [as <type|oci>] [--image <type|oci>] [--role <role>] [--pod] [--host] [--no-container] [--pwd <path>] [--model-url <url>] [--model-name <name>] [--model-key <key>]\n", bin)
 		return 1
 	}
 
@@ -211,6 +211,7 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 	// Flag parsing for overrides
 	isHostContainer := false
 	isNoContainer := false
+	usePod := os.Getenv("FLEET_ENABLE_PODS") == "1"
 	var pwdPath string
 	var dockerfilePath string
 	var engineType string
@@ -225,6 +226,8 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 	fs.StringVar(&modelName, "model-name", os.Getenv("OPENAI_MODEL"), "Target model name")
 	fs.StringVar(&modelKey, "model-key", os.Getenv("OPENAI_API_KEY"), "Model API key (optional)")
 	fs.StringVar(&modelKey, "model-api-key", os.Getenv("OPENAI_API_KEY"), "Model API key (optional)")
+	fs.BoolVar(&usePod, "pod", usePod, "Co-locate agent and sidecars in a Podman pod (ADR 00053)")
+	fs.BoolVar(&usePod, "use-pod", usePod, "Co-locate agent and sidecars in a Podman pod (ADR 00053)")
 	fs.BoolVar(&isHostContainer, "host", false, "Provision host-connected container agent with workspace projection")
 	fs.BoolVar(&isNoContainer, "no-container", false, "Provision agent without a container (direct host execution)")
 	fs.StringVar(&pwdPath, "pwd", "", "Host working directory to project into container workspace (default: current directory)")
@@ -377,6 +380,8 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 		fmt.Fprintf(stderr, "%s error: %v\n", bin, err)
 		return 1
 	}
+	cfg.UsePod = usePod
+	cfg.PodName = runtime.AgentPodName(agentName)
 
 	if engineType != "" && engineType != "fleet-agent" && engineType != "default" {
 		cfg.Harness = engineType

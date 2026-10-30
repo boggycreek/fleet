@@ -76,3 +76,34 @@ func TestAgentRetireForce(t *testing.T) {
 
 	_ = out
 }
+
+func TestAgentCreate_PodFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	paths := config.GetPaths()
+	if err := paths.EnsureDirectories(); err != nil {
+		t.Fatalf("failed to ensure directories: %v", err)
+	}
+
+	// Create no-container agent with --pod flag
+	code, out, errOut := runFleet([]string{"agent", "create", "pod-bot", "--no-container", "--pod"})
+	if code != 0 {
+		t.Fatalf("agent create with --pod failed, code %d: out=%s err=%s", code, out, errOut)
+	}
+
+	cfg, err := config.LoadAgentConfig("pod-bot", paths)
+	if err != nil {
+		t.Fatalf("failed to load agent config: %v", err)
+	}
+	if !cfg.UsePod {
+		t.Errorf("expected cfg.UsePod to be true")
+	}
+	if cfg.PodName != "fleet-pod-bot" {
+		t.Errorf("expected cfg.PodName to be fleet-pod-bot, got %s", cfg.PodName)
+	}
+	if !cfg.UsePods() {
+		t.Errorf("expected cfg.UsePods() to be true")
+	}
+}
