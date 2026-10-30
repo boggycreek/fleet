@@ -1093,4 +1093,44 @@ func TestStartOpenRouterContainer(t *testing.T) {
 			t.Errorf("openrouter key leaked in argv: %s", arg)
 		}
 	}
+
+	// 3. Container already exists
+	restoreExisting := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "podman" && len(args) > 0 && args[0] == "container" && args[1] == "exists" {
+			return exec.Command("true")
+		}
+		return exec.Command("true")
+	})
+	if err := StartOpenRouterContainer(ctx, paths); err != nil {
+		t.Errorf("expected nil when container already exists, got: %v", err)
+	}
+	restoreExisting()
+
+	// 4. Podman run failure
+	restoreFail := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "podman" && len(args) > 0 && args[0] == "container" && args[1] == "exists" {
+			return exec.Command("false")
+		}
+		if name == "podman" && len(args) > 0 && args[0] == "run" {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	})
+	if err := StartOpenRouterContainer(ctx, paths); err == nil {
+		t.Errorf("expected error when podman run fails")
+	}
+	restoreFail()
+}
+
+func TestInfraContainerSettersForTest(t *testing.T) {
+	r1 := SetInfraNetworkForTest("test-net")
+	r1()
+	r2 := SetInfraValkeyContainerForTest("test-valkey")
+	r2()
+	r3 := SetInfraSonarContainerForTest("test-sonar")
+	r3()
+	r4 := SetInfraForgejoContainerForTest("test-forgejo")
+	r4()
+	r5 := SetInfraOpenRouterContainerForTest("test-openrouter")
+	r5()
 }
