@@ -60,7 +60,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist/${{ matrix.os }}_${{ matrix.arch }}
-          go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.os }}_${{ matrix.arch }}/fleet ./sandbox/cmd/fleet
+          go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.os }}_${{ matrix.arch }}/fleet ./cli/cmd/fleet
           go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.os }}_${{ matrix.arch }}/bp ./backplane/cmd/bp
           go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.os }}_${{ matrix.arch }}/bpd ./backplane/cmd/bpd
           go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.os }}_${{ matrix.arch }}/sonar-mcp ./mcp/cmd/sonar-mcp

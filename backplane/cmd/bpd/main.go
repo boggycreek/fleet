@@ -15,8 +15,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
-	"github.com/boggycreek/sandbox/backplane/pkg/libbpd"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/backplane/pkg/libbpd"
 )
 
 func printUsage(out io.Writer) {

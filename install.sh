@@ -375,7 +375,7 @@ if [ "${INSTALLED_PREBUILT}" = "true" ] && [ -f "${FLEET_BIN}" ]; then
   echo "  Installed prebuilt native CLI binaries (fleet, bp, bpd, sonar-mcp) from GitHub Releases."
 elif command -v go >/dev/null 2>&1 && { [ -f "${SANDBOX_ROOT}/go.work" ] || [ -f "${SANDBOX_ROOT}/go.mod" ]; }; then
   echo "  Compiling native Go CLI binaries from source..."
-  (cd "${SANDBOX_ROOT}" && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${FLEET_BIN}" ./sandbox/cmd/fleet && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${BP_BIN}" ./backplane/cmd/bp && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${BPD_BIN}" ./backplane/cmd/bpd && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${SONAR_MCP_BIN}" ./mcp/cmd/sonar-mcp)
+  (cd "${SANDBOX_ROOT}" && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${FLEET_BIN}" ./cli/cmd/fleet && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${BP_BIN}" ./backplane/cmd/bp && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${BPD_BIN}" ./backplane/cmd/bpd && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${SONAR_MCP_BIN}" ./mcp/cmd/sonar-mcp)
   chmod +x "${FLEET_BIN}" "${BP_BIN}" "${BPD_BIN}" "${SONAR_MCP_BIN}" 2>/dev/null || true
   echo "  Installed ${FLEET_BIN}, ${BP_BIN}, ${BPD_BIN}, and ${SONAR_MCP_BIN}"
 elif [ ! -f "${FLEET_BIN}" ]; then
@@ -384,7 +384,7 @@ elif [ ! -f "${FLEET_BIN}" ]; then
 # Temporary bootstrap dispatcher until native Go binary is compiled or downloaded
 if command -v go >/dev/null 2>&1 && [ -d "${SANDBOX_ROOT}" ]; then
   echo "Compiling native fleet binary..."
-  (cd "${SANDBOX_ROOT}" && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${FLEET_BIN}" ./sandbox/cmd/fleet && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${BP_BIN}" ./backplane/cmd/bp)
+  (cd "${SANDBOX_ROOT}" && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${FLEET_BIN}" ./cli/cmd/fleet && env -u GOROOT go build -trimpath -ldflags="-s -w" -o "${BP_BIN}" ./backplane/cmd/bp)
   exec "${FLEET_BIN}" "\$@"
 fi
 echo "Fleet CLI (fleet)"

@@ -6,7 +6,7 @@ COPY go.work ./
 COPY agent/ ./agent/
 COPY backplane/ ./backplane/
 COPY mcp/ ./mcp/
-COPY sandbox/ ./sandbox/
+COPY cli/ ./cli/
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /build/bpd ./backplane/cmd/bpd
 
 FROM fleet-core:latest

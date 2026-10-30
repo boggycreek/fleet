@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boggycreek/sandbox/mcp/pkg/memory"
-	"github.com/boggycreek/sandbox/mcp/pkg/mcp"
+	"github.com/boggycreek/fleet/mcp/pkg/memory"
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 func rawArgs(v any) json.RawMessage {

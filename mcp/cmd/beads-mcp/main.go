@@ -16,7 +16,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/boggycreek/sandbox/mcp/pkg/mcp"
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 // JSONRPCMessage aliases mcp.JSONRPCMessage for testing compatibility.

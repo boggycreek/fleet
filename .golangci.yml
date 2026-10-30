@@ -3,7 +3,7 @@
 # Use of this source code is governed by an MIT-style
 # license that can be found in the LICENSE file.
 
-# golangci-lint configuration for Agent Sandbox Go Monorepo
+# golangci-lint configuration for Fleet Go Monorepo
 run:
   timeout: 5m
   issues-exit-code: 1

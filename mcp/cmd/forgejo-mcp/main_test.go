@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boggycreek/sandbox/pkg/forgejo"
+	"github.com/boggycreek/fleet/cli/pkg/forgejo"
 )
 
 type mockForgejoClient struct {

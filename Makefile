@@ -1,4 +1,4 @@
-# Agent Sandbox — Root Makefile
+# Fleet — Root Makefile
 
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
@@ -39,7 +39,7 @@ lint: lint-go lint-shell ## Run all Go and shell linter checks
 lint-go: ## Run golangci-lint on Go code
 	@echo "==> Running golangci-lint..."
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./agent/... ./backplane/... ./mcp/... ./sandbox/...; \
+		golangci-lint run ./agent/... ./backplane/... ./mcp/... ./cli/...; \
 	else \
 		echo "Warning: golangci-lint not installed. Run ./setup.sh to install."; \
 	fi
@@ -63,7 +63,7 @@ format: ## Auto-format Go code and scripts
 test: ## Run unit tests with race detection
 	@echo "==> Running Go unit tests..."
 	@if [ -f go.work ] || [ -f go.mod ]; then \
-		$(GO) test -race -v ./agent/... ./backplane/... ./mcp/... ./sandbox/...; \
+		$(GO) test -race -v ./agent/... ./backplane/... ./mcp/... ./cli/...; \
 	else \
 		echo "Notice: go.work not yet initialized. Skipping test run."; \
 	fi
@@ -72,7 +72,7 @@ test-coverage: ## Run tests and enforce >90% code coverage threshold
 	@echo "==> Running unit tests with coverage analysis..."
 	@mkdir -p $(COVERAGE_DIR) && rm -f $(COVERAGE_PROFILE)
 	@if [ -f go.work ] || [ -f go.mod ]; then \
-		$(GO) test -race -covermode=atomic -coverprofile=$(COVERAGE_PROFILE) ./agent/pkg/... ./agent/cmd/... ./backplane/pkg/... ./backplane/cmd/... ./mcp/pkg/... ./mcp/cmd/... ./sandbox/pkg/... ./sandbox/cmd/...; \
+		$(GO) test -race -covermode=atomic -coverprofile=$(COVERAGE_PROFILE) ./agent/pkg/... ./agent/cmd/... ./backplane/pkg/... ./backplane/cmd/... ./mcp/pkg/... ./mcp/cmd/... ./cli/pkg/... ./cli/cmd/...; \
 		$(GO) tool cover -html=$(COVERAGE_PROFILE) -o $(COVERAGE_HTML); \
 		TOTAL_COV=$$($(GO) tool cover -func=$(COVERAGE_PROFILE) | grep total: | awk '{print substr($$3, 1, length($$3)-1)}'); \
 		echo "==> Total Test Coverage: $${TOTAL_COV}% (Required: >= $(COVERAGE_THRESHOLD)%)"; \
@@ -98,7 +98,7 @@ vulncheck: ## Run govulncheck on Go dependencies
 	@echo "==> Running govulncheck (Software Composition Analysis)..."
 	@if command -v govulncheck >/dev/null 2>&1; then \
 		if [ -f go.work ] || [ -f go.mod ]; then \
-			govulncheck ./agent/... ./backplane/... ./mcp/... ./sandbox/...; \
+			govulncheck ./agent/... ./backplane/... ./mcp/... ./cli/...; \
 		fi; \
 	else \
 		echo "Notice: govulncheck not installed. Install via: go install golang.org/x/vuln/cmd/govulncheck@latest"; \
@@ -108,7 +108,7 @@ gosec: ## Run gosec static security analysis
 	@echo "==> Running gosec security analyzer..."
 	@if command -v gosec >/dev/null 2>&1; then \
 		if [ -f go.work ] || [ -f go.mod ]; then \
-			gosec -quiet ./agent/... ./backplane/... ./mcp/... ./sandbox/...; \
+			gosec -quiet ./agent/... ./backplane/... ./mcp/... ./cli/...; \
 		fi; \
 	else \
 		echo "Notice: gosec not installed. Install via: go install github.com/securego/gosec/v2/cmd/gosec@latest"; \
@@ -142,7 +142,7 @@ build-cli: ## Build native Go CLI binaries (fleet, bp, bpd, mcps)
 	@echo "==> Building CLI binaries..."
 	@mkdir -p $(BIN_DIR)
 	@if [ -f go.work ] || [ -f go.mod ]; then \
-		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/fleet ./sandbox/cmd/fleet; \
+		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/fleet ./cli/cmd/fleet; \
 		ln -sf fleet $(BIN_DIR)/ft; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/fleet-agent ./agent/cmd/fleet-agent; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/bp ./backplane/cmd/bp; \

@@ -1,11 +1,11 @@
 {
-  "id": "com.boggycreek.sndbx.toolbox",
+  "id": "com.boggycreek.fleet.toolbox",
   "version": "0.1.0-alpha",
   "apiVersion": "1.13.87111",
   "meta": {
-    "readableName": "Agent Sandbox",
-    "description": "Direct JetBrains Toolbox integration for local agent sandboxes",
+    "readableName": "Fleet",
+    "description": "Direct JetBrains Toolbox integration for local agent environments",
     "vendor": "Boggy Creek Software LLC",
-    "url": "https://github.com/boggycreek/sandbox"
+    "url": "https://github.com/boggycreek/fleet"
   }
 }

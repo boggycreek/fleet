@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boggycreek/sandbox/agent/pkg/runtime"
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/agent/pkg/runtime"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
 )
 
 // --- Verifier Tests ---
@@ -418,10 +418,10 @@ func TestValkeyGatewaySignatureVerification(t *testing.T) {
 
 	// 3. Signed message with valid envelope signature -> accepted
 	validMsg := &libbp.Message{
-		ID:        "m-good",
-		Sender:    "trusted-peer",
-		Content:   "good message",
-		IsSigned:  true,
+		ID:       "m-good",
+		Sender:   "trusted-peer",
+		Content:  "good message",
+		IsSigned: true,
 	}
 	validSig := libbp.SignPayload(priv, validMsg.SigningPayload())
 	validMsg.Signature = validSig

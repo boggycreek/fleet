@@ -18,8 +18,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/boggycreek/sandbox/mcp/pkg/mcp"
-	"github.com/boggycreek/sandbox/pkg/sonar"
+	"github.com/boggycreek/fleet/cli/pkg/sonar"
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 // JSONRPCMessage aliases mcp.JSONRPCMessage for testing compatibility.

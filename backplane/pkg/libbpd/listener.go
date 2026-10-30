@@ -10,7 +10,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
 )
 
 // StreamReceiver abstracts stream polling and reading operations from libbp.Client.

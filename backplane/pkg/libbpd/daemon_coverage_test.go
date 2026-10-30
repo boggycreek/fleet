@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
 )
 
 func TestLoadConfigFromEnv_NoHome(t *testing.T) {

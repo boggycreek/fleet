@@ -63,9 +63,9 @@ podman exec -u tester "${CONTAINER_NAME}" bash -c "
   export PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
   cd /home/tester
   # Copy local repo to simulate clean checkout
-  mkdir -p /home/tester/agent-sandbox
-  cp -r /repo/. /home/tester/agent-sandbox/
-  cd /home/tester/agent-sandbox
+  mkdir -p /home/tester/fleet
+  cp -r /repo/. /home/tester/fleet/
+  cd /home/tester/fleet
 
   # Run installer
   ./install.sh

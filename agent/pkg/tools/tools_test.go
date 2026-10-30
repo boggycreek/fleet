@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boggycreek/sandbox/mcp/pkg/mcp"
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 // --- Registry Tests ---

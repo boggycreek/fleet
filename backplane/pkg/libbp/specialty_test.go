@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp/resp"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp/resp"
 )
 
 func TestSpecialtyValidationAndHelpers(t *testing.T) {

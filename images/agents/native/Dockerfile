@@ -13,7 +13,7 @@ COPY go.work ./
 COPY agent/ ./agent/
 COPY backplane/ ./backplane/
 COPY mcp/ ./mcp/
-COPY sandbox/ ./sandbox/
+COPY cli/ ./cli/
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /build/fleet-agent ./agent/cmd/fleet-agent
 
 # Stage 2: Native Agent OCI Image based on fleet-daemon-base

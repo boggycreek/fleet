@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
 )
 
 type mockStreamReceiver struct {
