@@ -16,6 +16,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[Liquid Foundation Models Evaluation](liquid-ai-lfm-evaluation.md)** (`fleet-lfm-evaluation`): Architecture, serving engine compatibility, agentic tool calling, and local gateway recommendations for Liquid AI LFMs.
 - **[Colibri MoE Inference Evaluation](colibri-moe-inference.md)** (`fleet-colibri-evaluation`): Architectural evaluation of Colibri for NVMe-streamed frontier MoE inference on Fleet developer workstations.
 - **[Adversarial Review & Critic Protocol](adversarial-review.md)** (`fleet-adversarial-review`): Dual-agent adversarial review, hypothesis generation, and critic verification to eliminate hallucinations.
+- **[Language-Specific Best Practices](language-best-practices.md)** (`fleet-language-best-practices`): Language-specific engineering best practices and conventions for Go, Python, TypeScript/Node.js, Shell/Bash, and Rust.
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.
