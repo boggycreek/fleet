@@ -23,7 +23,7 @@ We express our sincere gratitude to the following open-source projects, tools, a
 - **[Conmon & crun](https://github.com/containers)** (Containers Community / Red Hat) — Apache-2.0 & GPL-2.0 Licenses  
   *Provides lightweight OCI container monitoring and low-level container execution.*
 - **[Debian GNU/Linux](https://www.debian.org/)** (The Debian Project) — Debian Free Software Guidelines (DFSG)  
-  *Serves as the solid, predictable base operating system layer for our `agent-sandbox-base` container image (`images/agent-base`).*
+  *Serves as the solid, predictable base operating system layer for our `fleet-core` container image (`images/agent-core`).*
 - **[Deno](https://deno.land/)** (Deno Land Inc. / The Deno Authors) — MIT License  
   *Modern, secure JavaScript and TypeScript runtime bundled into the base agent image for headless automation.*
 - **[Eclipse Temurin OpenJDK](https://adoptium.net/)** (Eclipse Adoptium / Eclipse Foundation) — GPL-2.0-with-classpath-exception License

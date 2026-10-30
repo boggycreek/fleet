@@ -38,65 +38,118 @@ The installer recognizes the local checkout and sets it up as the active fleet i
 
 ---
 
-## Core Architecture & Components
+## Core Architecture & Container Isolation Model
 
+Fleet enforces strict security and execution boundaries between the workstation host and autonomous agents:
+
+- **Unprivileged Rootless Podman Boundary**: Agent containers run under unprivileged user namespaces (`agent`, UID/GID 1000) with Linux capability drops. Agents cannot escalate privileges to `root` or access host files outside explicitly projected paths.
+- **Host LLM Gateway Isolation**: Containerized agents communicate with host-local inference models (Ollama, llama.cpp, vLLM, LiteLLM) via a dedicated bridge target (`http://llm-gateway:<port>/v1`), translating `localhost` requests without exposing host network listeners.
+- **Zero Host Credential Leakage**: Host environment variables, Cloud API tokens, and SSH keys are shielded from agent containers. Sensitive parameters are injected securely into process environments (`cmd.Env`) without leaking onto process command-line vectors (`argv`).
 - **Layered OCI Container Hierarchy**:
-  - `images/agent-core/`: Minimal base image with Debian Bookworm, unprivileged user (`agent`, UID 1000), and base utilities.
-  - `images/agent-daemon-base/`: Daemon base image with internal SSH daemon (port 2222), tmux supervisor, and the `bpd` entrypoint daemon.
-  - `images/agent-tool-base/`: Ephemeral foreground tool container base image.
-  - `images/agents/`: Derivative agent harnesses (`opencode`, `claude`, `agy`, `pig`, `native`).
+  - `images/agent-core/`: Foundational base image built on Debian Bookworm with unprivileged `agent` user (UID 1000).
+  - `images/agent-daemon-base/`: Daemon base image featuring rootless SSH daemon (port 2222), tmux supervisor, and `bpd` entrypoint daemon.
+  - `images/agent-tool-base/`: Ephemeral foreground tool container base image for interactive workspace projection.
+  - `images/agents/`: Specialized derivative agent harnesses (`opencode`, `claude`, `agy`, `pig`, `native`).
 - **Native Go Monorepo & Zero-Dependency Binaries**:
   - `fleet`: Unified host CLI (alias `ft`) for managing agent lifecycles, shared infrastructure, and IDE plugins.
-  - `bp`: Cross-agent messaging CLI.
+  - `bp`: Cross-agent backplane messaging CLI.
   - `bpd`: In-container backplane daemon handling background message polling, headless command execution, and turn dispatching.
   - `libbp`: Core backplane client library with RESP protocol parser and Ed25519 signing.
-- **Valkey Communication Backplane**: Asynchronous cross-agent messaging bus utilizing Redis Streams (`<id>:out`, `<id>:inbox`, `<id>:seq`), per-agent Valkey ACLs, Ed25519 digital signatures, and threaded reply citations.
-- **Local Forgejo Git Forge**: A host-local, rootless Forgejo server on the `fleet-infra` network providing Git hosting, inter-agent pull requests, and distributed task tracking with Beads (`bd`).
-- **In-Container Task Tracking (Beads)**: Task graph and dependency tracking (`~/tasks`, `fleet-tasks ready`, `bd ready`) backed by `http://forgejo:3000/fleet/tasks.git`.
-- **Local Model Gateway (`llm-gateway`)**: Host gateway routing (`http://llm-gateway:<port>/v1`) allowing containerized agents to query local OpenAI-compatible inference servers (Ollama, llama.cpp, vLLM, LiteLLM) running on the host.
-- **IDE Remote Access**: Direct remote development from VS Code and JetBrains IDEs over unprivileged SSH with isolated per-agent host aliases (`fleet-<name>`).
+- **Valkey Communication Backplane**: Asynchronous cross-agent messaging bus utilizing Redis Streams (`<id>:out`, `<id>:inbox`), per-agent Valkey ACLs, Ed25519 digital signatures, and threaded reply citations.
+- **Local Forgejo Git Forge & In-Container Beads**: A host-local, rootless Forgejo server on the `fleet-infra` network providing Git hosting, inter-agent pull requests, and distributed task tracking with Beads (`bd ready`) backed by `http://forgejo:3000/fleet/tasks.git`.
+- **IDE Remote Access**: Direct remote development from VS Code, Cursor, and JetBrains IDEs over unprivileged SSH with isolated per-agent host aliases (`fleet-<name>`).
 
 ---
 
 ## Host CLI (`fleet`) Command Reference
 
+The `fleet` CLI (also aliased as `ft`) is the primary host-side operator tool for managing infrastructure, agent lifecycles, and IDE plugins.
+
+### Agent Lifecycle Management (`fleet agent`)
+
 ```bash
-# Shared Infrastructure (Valkey Backplane + Forgejo Forge)
-fleet infra up                                           # Start Valkey and Forgejo containers
-fleet infra list                                         # View service status and connection endpoints
-fleet infra doctor                                       # Diagnose shared infrastructure and auto-heal defects
-fleet infra down                                         # Stop shared services (preserves data volumes)
+# Provision a new agent instance
+fleet agent create <name> [as <type>] [--role <role>] [--host|--no-container] [--model-url <url>] [--model-name <name>] [--model-key <key>]
 
-# Agent Instance Lifecycle
-fleet agent create <name> [as <type>] [--role <role>]    # Provision a new agent (base, opencode, claude, agy)
-fleet agent start <name>                                 # Start the agent container with Podman
-fleet agent tmux <name>                                  # Attach interactively to the container tmux session
-fleet agent open <name> [in <ide>] [--no-launch]         # Launch desktop IDE remote development (VS Code, JetBrains)
-fleet agent ssh <name>                                   # SSH directly into unprivileged environment
-fleet agent ssh-config [name] [--all]                    # Generate OpenSSH config stanzas for IDE Remote-SSH
-fleet agent doctor <name>                                # Diagnose configuration, keys, storage, and auto-heal
-fleet agent list [--json]                                # List configured instances, status, and SSH ports
-fleet agent stop [name] [--all]                          # Stop agent container(s)
-fleet agent clean <name>                                 # Remove container (preserves persistent home volume)
+# Lifecycle operations
+fleet agent start <name>                                 # Start agent container with Podman
+fleet agent stop [name] [--all]                          # Stop running agent container(s)
+fleet agent clean <name>                                 # Remove container instance (preserves persistent volume)
 fleet agent retire <name> [--force]                      # Fully deprovision agent (container, volume, Valkey, Forgejo)
+fleet agent doctor <name>                                # Audit configuration, keys, storage, and auto-heal defects
+fleet agent list [--json]                                # List all configured agents, state, and SSH endpoints
 
-# IDE Plugins & Integration
-fleet plugin add <gateway|toolbox|vscode>                # Install & configure IDE plugin / SSH integration
-fleet plugin remove <gateway|toolbox|vscode>             # Uninstall & unlink IDE plugin configuration
-fleet plugin list                                        # List supported and installed IDE plugins
+# Interactive execution & IDE integration
+fleet agent open <name> [in <ide>] [--no-launch]         # Open agent in VS Code, JetBrains Gateway, Cursor, etc.
+fleet agent tmux <name>                                  # Attach interactively to agent tmux supervisor session
+fleet agent ssh <name>                                   # Connect via SSH directly into unprivileged environment
+fleet agent ssh-config [name] [--all]                    # Output OpenSSH config stanza for manual SSH setups
+```
 
-# Installation & Workspace Updates
-fleet update                                             # Synchronize git repo, rebuild host CLIs, and build OCI images
+### Shared Infrastructure (`fleet infra`)
+
+Shared infrastructure containers (Valkey messaging broker, Forgejo git forge, and PostgreSQL) run on the rootless `fleet-infra` network.
+
+```bash
+fleet infra up                                           # Start Valkey and Forgejo shared containers
+fleet infra list                                         # View running status of infrastructure containers
+fleet infra doctor                                       # Diagnose infrastructure health and auto-heal storage/networks
+fleet infra down                                         # Stop shared infrastructure (data volumes preserved)
+```
+
+### IDE Plugins (`fleet plugin`)
+
+Seamlessly configure host IDE remote development links and SSH configurations.
+
+```bash
+fleet plugin add <gateway|toolbox|vscode>                # Install & configure specified IDE plugin/integration
+fleet plugin remove <gateway|toolbox|vscode>             # Uninstall IDE plugin & unlink managed SSH configs
+fleet plugin list                                        # Display status of supported IDE plugins
+```
+
+### Platform Maintenance (`fleet update`)
+
+```bash
+fleet update                                             # Synchronize repository, rebuild host CLIs, and rebuild OCI images
 ```
 
 ---
 
-## Architecture & Design Documentation
+## Cross-Agent Messaging CLI (`bp`)
 
-Detailed architectural specifications and decision records:
+The `bp` CLI allows human operators and host processes to communicate directly with containerized agents over the cryptographically signed Valkey backplane fabric.
 
-- **[AGENTS.md](AGENTS.md)**: System guide covering runtime architecture, messaging protocol, local inference gateway, security boundaries, and engineering quality gates.
-- **[Developer Setup & Contributing Guide](CONTRIBUTING.md)**: Workstation setup (`setup.sh`), environment doctor (`setup.sh --doctor`), XDG Go management, quality gates, and Beads workflow.
+```bash
+bp whoami                                                # Print active identity, connection mode, and Ed25519 public key
+bp peers [--json]                                        # List active agents and presence statuses across the fleet
+bp say <message> [--file <path>]                         # Broadcast message to all agents on the backplane
+bp tell <agent> <message> [--file <path>]                # Send direct point-to-point message to target agent inbox
+bp reply <msgid> <agent> <message>                       # Reply in-thread to a specific message ID citation
+bp recv [--block <sec>] [--json]                         # Read incoming messages since last cursor position
+bp status set <message>                                  # Set 300s ephemeral presence status on the backplane
+```
+
+---
+
+## Practical How-To Guides
+
+Task-oriented guides and step-by-step workflows are available in `doc/how-to/`:
+
+- **[Getting Started Quickstart](doc/how-to/getting-started.md)**: Zero-to-agent walkthrough from `./install.sh` to running your first autonomous agent.
+- **[Cross-Agent Communication Guide](doc/how-to/cross-agent-communication.md)**: Deep dive into Valkey Streams backplane messaging, Ed25519 signing, and `bp` commands.
+- **[IDE Remote Development Setup](doc/how-to/ide-integration.md)**: Step-by-step setup for VS Code, Cursor, and JetBrains Gateway using `fleet plugin` and SSH links.
+- **[Diagnostics & Troubleshooting](doc/how-to/diagnostics-and-troubleshooting.md)**: Automated health checks and self-healing with `fleet agent doctor` and `fleet infra doctor`.
+
+---
+
+## Architecture & System Documentation
+
+Detailed architectural specifications, developer protocols, and decision records:
+
+- **[AGENTS.md](AGENTS.md)**: Platform runtime guide covering messaging protocols, local inference gateway, security boundaries, and engineering gates.
+- **[AI Agent Knowledge Base](doc/ai/README.md)**: Technical guides for autonomous coding agents (`dev-workflow.md`, `architecture.md`, `doctor-diagnostics.md`, `image-resolution.md`, `testing-guidelines.md`, `code-review.md`).
+- **[Developer Setup & Contributing Guide](CONTRIBUTING.md)**: Workstation setup (`setup.sh`), environment doctor (`setup.sh --doctor`), quality gates, and Beads workflow.
+- **[Architecture Decision Records](doc/adr/README.md)**: Complete index of architectural decision records (`00001` through `00047`).
 
 ---
 
@@ -114,5 +167,3 @@ Detailed architectural specifications and decision records:
 - **License**: Fleet is licensed under the [MIT License](LICENSE) by **Boggy Creek Software LLC**.
 - **Acknowledgements**: See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for ecosystem credits and community appreciation.
 - **Third-Party Notices**: See [NOTICES.md](NOTICES.md) for third-party copyright statements, SPDX license identifiers, and legal notices.
-
-

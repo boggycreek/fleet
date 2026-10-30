@@ -8,7 +8,7 @@ description: >-
 # Architecture & Container Runtime
 
 ## Container Isolation & Security Boundary
-- **Engine**: Rootless Podman exclusively (ADR 00019). No Docker or docker-compose daemon dependencies.
+- **Engine**: Rootless Podman exclusively (ADR 00003). No Docker or docker-compose daemon dependencies.
 - **Security Perimeter**: Container boundary isolates agent actions. Agents run unprivileged (UID 1000) inside containers.
 - **Network**: Shared bridge network `fleet-infra`.
 - **Storage**: Named persistent Podman volumes (`fleet-<name>-home`).
@@ -30,7 +30,8 @@ description: >-
 - Translates `localhost` / `127.0.0.1` URLs to `http://llm-gateway:<port>/v1`.
 
 Further reading:
-- [ADR 00013 — Layered OCI Container Hierarchy](../adr/00013-LayeredOciContainerHierarchy.md)
-- [ADR 00019 — Podman as Required Dependency](../adr/00019-PodmanAsRequiredDependency.md)
-- [ADR 00021 — Local OpenAI Inference Support](../adr/00021-LocalOpenAICompatibleInferenceSupport.md)
-- [ADR 00024 — In-Container SSH Daemon](../adr/00024-InContainerSshdAndIdeEnsemblingWorkflow.md)
+- [ADR 00003 — Podman as Required Container Engine](../adr/00003-PodmanAsRequiredContainerEngine.md)
+- [ADR 00006 — Layered OCI Container Hierarchy](../adr/00006-LayeredOciContainerHierarchy.md)
+- [ADR 00043 — Base OCI Hierarchy](../adr/00043-BaseOciHierarchy.md)
+- [ADR 00035 — Host-Bridged Local LLM Inference Gateway](../adr/00035-HostBridgedLocalLlmInferenceGateway.md)
+- [ADR 00016 — One-Shot IDE Remote Development](../adr/00016-OneShotIdeRemoteDevelopmentAndHostEnsembling.md)

@@ -5,7 +5,7 @@ description: >-
   Use when creating agents, configuring custom container harnesses, or debugging image resolution.
 ---
 
-# OCI Image Resolution & Tagging (ADR 00029)
+# OCI Image Resolution & Tagging (ADR 00043)
 
 ## Image Resolution Tiers
 When creating agents (`fleet agent create <name> [as <target>]`):
@@ -31,4 +31,5 @@ When creating agents (`fleet agent create <name> [as <target>]`):
 - Remote base images in Dockerfiles must use fully qualified references (e.g. `docker.io/library/golang:1.27-bookworm`) to prevent unqualified-search errors on strict Podman hosts.
 
 Further reading:
-- [ADR 00029 — Flexible Agent Image Resolution and Local Store Support](../adr/00029-FlexibleAgentImageResolutionAndLocalStoreSupport.md)
+- [ADR 00006 — Layered OCI Container Hierarchy](../adr/00006-LayeredOciContainerHierarchy.md)
+- [ADR 00043 — Base OCI Hierarchy](../adr/00043-BaseOciHierarchy.md)
