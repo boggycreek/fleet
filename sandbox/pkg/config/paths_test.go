@@ -59,6 +59,10 @@ func TestPathsLoadEnv(t *testing.T) {
 	}
 
 	p := Paths{EnvFile: envPath}
+	t.Cleanup(func() {
+		_ = os.Unsetenv("TEST_PATHS_KEY1")
+		_ = os.Unsetenv("TEST_PATHS_KEY2")
+	})
 	p.LoadEnv()
 
 	if val := os.Getenv("TEST_PATHS_KEY1"); val != "alpha" {
@@ -153,20 +157,25 @@ func TestPathsResolveRepoDir(t *testing.T) {
 		}
 	}
 
-	// 4. Resolve from deep child subdirectory of current working directory
-	cwd, err := os.Getwd()
-	if err == nil {
-		childDir := filepath.Join(cwd, "test", "sub")
-		_ = os.MkdirAll(childDir, 0755)
-		defer os.RemoveAll(filepath.Join(cwd, "test", "sub"))
-		_ = os.Chdir(childDir)
-		defer func() { _ = os.Chdir(cwd) }()
+	// 4. Resolve from deep child subdirectory of isolated mock directory hierarchy
+	mockRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mockRoot, "Makefile"), []byte("# mock"), 0644); err != nil {
+		t.Fatalf("write mock Makefile failed: %v", err)
+	}
+	childDir := filepath.Join(mockRoot, "deep", "nested", "sub")
+	if err := os.MkdirAll(childDir, 0755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
 
-		pEmpty := Paths{}
-		resolved := pEmpty.ResolveRepoDir()
-		if _, err := os.Stat(filepath.Join(resolved, "go.work")); err != nil {
-			if _, err2 := os.Stat(filepath.Join(resolved, "Makefile")); err2 != nil {
-				t.Errorf("expected workspace root with go.work/Makefile, got %q", resolved)
+	origWd, err := os.Getwd()
+	if err == nil {
+		t.Cleanup(func() { _ = os.Chdir(origWd) })
+		if err := os.Chdir(childDir); err == nil {
+			pEmpty := Paths{}
+			resolved := pEmpty.ResolveRepoDir()
+			_ = os.Chdir(origWd)
+			if resolved != mockRoot {
+				t.Errorf("expected upward resolution to %q, got %q", mockRoot, resolved)
 			}
 		}
 	}
@@ -220,6 +229,11 @@ func TestPathsSetEnvVar(t *testing.T) {
 	tmpDir := t.TempDir()
 	envPath := filepath.Join(tmpDir, "test.env")
 	p := Paths{EnvFile: envPath}
+
+	t.Cleanup(func() {
+		_ = os.Unsetenv("KEY1")
+		_ = os.Unsetenv("KEY2")
+	})
 
 	checkPerms := func(expected os.FileMode) {
 		info, err := os.Stat(envPath)
@@ -277,5 +291,103 @@ func TestPathsProjectsDir(t *testing.T) {
 	p := GetPaths()
 	if !strings.HasSuffix(p.ProjectsDir, filepath.Join("fleet", "projects")) {
 		t.Errorf("expected ProjectsDir to end with fleet/projects, got %s", p.ProjectsDir)
+	}
+}
+
+func TestPathsFallbackAndHome(t *testing.T) {
+	// 1. GetSSHPrivateKey returns IDEKeyFile when SSHPrivateKey is empty
+	p := Paths{IDEKeyFile: "/tmp/ide_key"}
+	if key := p.GetSSHPrivateKey(); key != "/tmp/ide_key" {
+		t.Errorf("expected IDEKeyFile fallback, got %q", key)
+	}
+
+	// 2. GetPaths with HOME unset uses /tmp
+	t.Setenv("HOME", "")
+	paths := GetPaths()
+	if !strings.HasPrefix(paths.DataHome, "/tmp") && !strings.Contains(paths.DataHome, "fleet") {
+		t.Errorf("expected /tmp fallback when HOME is unset, got %+v", paths)
+	}
+}
+
+func TestPathsSetEnvVar_Branches(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	t.Cleanup(func() {
+		_ = os.Unsetenv("KEY2")
+	})
+
+	// 1. EnvFile is a directory -> ReadFile returns error
+	dirEnv := Paths{EnvFile: tmpDir}
+	if err := dirEnv.SetEnvVar("KEY", "VAL"); err == nil {
+		t.Errorf("expected error when EnvFile is a directory")
+	}
+
+	// 2. Existing file without trailing newline
+	envFile := filepath.Join(tmpDir, "no_trailing.env")
+	if err := os.WriteFile(envFile, []byte("KEY1=val1"), 0600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	p := Paths{EnvFile: envFile}
+	if err := p.SetEnvVar("KEY2", "val2"); err != nil {
+		t.Fatalf("SetEnvVar failed: %v", err)
+	}
+	data, _ := os.ReadFile(envFile)
+	if !strings.Contains(string(data), "KEY2=val2") {
+		t.Errorf("unexpected content: %q", string(data))
+	}
+
+	// 3. EnvFile parent directory is not writable -> CreateTemp fails
+	roDir := filepath.Join(tmpDir, "ro_dir")
+	if err := os.MkdirAll(roDir, 0500); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	defer func() { _ = os.Chmod(roDir, 0700) }()
+	failCreate := Paths{EnvFile: filepath.Join(roDir, "test.env")}
+	if err := failCreate.SetEnvVar("KEY", "VAL"); err == nil {
+		t.Errorf("expected error when directory is not writable")
+	}
+}
+
+func TestPathsResolveRepoDir_EdgeCases(t *testing.T) {
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	// Clear repo env vars
+	t.Setenv("FLEET_REPO", "")
+	t.Setenv("AGENT_SANDBOX_REPO", "")
+	t.Setenv("FLEET_ROOT", "")
+	t.Setenv("SANDBOX_ROOT", "")
+
+	tmpDir := t.TempDir()
+
+	// 1. Current working directory has Makefile
+	cwdWithMakefile := filepath.Join(tmpDir, "cwd_with_makefile")
+	_ = os.MkdirAll(cwdWithMakefile, 0755)
+	_ = os.WriteFile(filepath.Join(cwdWithMakefile, "Makefile"), []byte("all:"), 0644)
+	if err := os.Chdir(cwdWithMakefile); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	p := Paths{DataHome: filepath.Join(tmpDir, "data")}
+	repo := p.ResolveRepoDir()
+	_ = os.Chdir(origDir)
+	if repo != cwdWithMakefile {
+		t.Errorf("expected %q, got %q", cwdWithMakefile, repo)
+	}
+
+	// 2. No Makefile in cwd or any parent directory (in /tmp)
+	emptySubdir := filepath.Join(tmpDir, "empty_sub", "deep")
+	_ = os.MkdirAll(emptySubdir, 0755)
+	if err := os.Chdir(emptySubdir); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	repoFallback := p.ResolveRepoDir()
+	_ = os.Chdir(origDir)
+	if repoFallback != emptySubdir {
+		t.Errorf("expected fallback to %q, got %q", emptySubdir, repoFallback)
 	}
 }

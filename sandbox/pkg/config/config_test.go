@@ -205,3 +205,109 @@ func TestPathsAndAgentConfig(t *testing.T) {
 		t.Errorf("expected ListAgentConfigs to return error when AgentsDir is a file")
 	}
 }
+
+func TestSaveAgentConfig_BPProfilesAndErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+	bpDir := filepath.Join(tmpDir, "profiles")
+	paths := Paths{
+		DataHome:      filepath.Join(tmpDir, "data"),
+		AgentsDir:     filepath.Join(tmpDir, "data", "agents"),
+		SecretsDir:    filepath.Join(tmpDir, "data", "secrets"),
+		BPProfilesDir: bpDir,
+	}
+	if err := paths.EnsureDirectories(); err != nil {
+		t.Fatalf("EnsureDirectories failed: %v", err)
+	}
+
+	cfg, err := NewAgentConfig("bp-agent", "base", "worker")
+	if err != nil {
+		t.Fatalf("NewAgentConfig failed: %v", err)
+	}
+
+	// 1. Successful save with BPProfilesDir configured
+	if err := SaveAgentConfig(cfg, paths); err != nil {
+		t.Fatalf("SaveAgentConfig failed: %v", err)
+	}
+	profilePath := filepath.Join(bpDir, "bp-agent.env")
+	data, err := os.ReadFile(profilePath)
+	if err != nil || !strings.Contains(string(data), "BP_AGENT=bp-agent") {
+		t.Errorf("expected backplane profile created with BP_AGENT, got err=%v, data=%s", err, string(data))
+	}
+
+	// Verify explicit file and directory permissions
+	jsonPath := filepath.Join(paths.AgentsDir, "bp-agent.json")
+	if info, err := os.Stat(jsonPath); err != nil {
+		t.Errorf("failed to stat agent json: %v", err)
+	} else if info.Mode().Perm() != 0600 {
+		t.Errorf("expected agent json mode 0600, got %v", info.Mode().Perm())
+	}
+
+	secretDir := filepath.Join(paths.SecretsDir, "bp-agent")
+	if info, err := os.Stat(secretDir); err != nil {
+		t.Errorf("failed to stat agent secret directory: %v", err)
+	} else if info.Mode().Perm() != 0700 {
+		t.Errorf("expected agent secret directory mode 0700, got %v", info.Mode().Perm())
+	}
+
+	keyPath := filepath.Join(secretDir, "signing-key.pem")
+	if info, err := os.Stat(keyPath); err != nil {
+		t.Errorf("failed to stat signing key: %v", err)
+	} else if info.Mode().Perm() != 0600 {
+		t.Errorf("expected signing key mode 0600, got %v", info.Mode().Perm())
+	}
+
+	if info, err := os.Stat(profilePath); err != nil {
+		t.Errorf("failed to stat bp profile: %v", err)
+	} else if info.Mode().Perm() != 0600 {
+		t.Errorf("expected bp profile mode 0600, got %v", info.Mode().Perm())
+	}
+
+	// 2. DeleteAgentConfig removes profile
+	if err := DeleteAgentConfig("bp-agent", paths); err != nil {
+		t.Fatalf("DeleteAgentConfig failed: %v", err)
+	}
+	if _, err := os.Stat(profilePath); !os.IsNotExist(err) {
+		t.Errorf("expected profile file to be deleted")
+	}
+
+	// 3. SaveAgentConfig fails when BPProfilesDir cannot be created (is a file)
+	blockerFile := filepath.Join(tmpDir, "blocker")
+	_ = os.WriteFile(blockerFile, []byte("blocker"), 0600)
+	failBPPaths := paths
+	failBPPaths.BPProfilesDir = filepath.Join(blockerFile, "sub")
+	if err := SaveAgentConfig(cfg, failBPPaths); err == nil {
+		t.Errorf("expected SaveAgentConfig to fail when BPProfilesDir cannot be created")
+	}
+
+	// 4. SaveAgentConfig fails when profilePath cannot be written (profilePath is a directory)
+	failWritePaths := paths
+	_ = os.MkdirAll(filepath.Join(bpDir, "dir-agent.env"), 0755)
+	cfgDirAgent, _ := NewAgentConfig("dir-agent", "base", "worker")
+	if err := SaveAgentConfig(cfgDirAgent, failWritePaths); err == nil {
+		t.Errorf("expected SaveAgentConfig to fail when profile path is a directory")
+	}
+
+	// 5. SaveAgentConfig fails when SecretsDir has a file preventing secret directory creation
+	failSecretPaths := paths
+	cfgSecret, _ := NewAgentConfig("secret-agent", "base", "worker")
+	_ = os.WriteFile(filepath.Join(paths.SecretsDir, "secret-agent"), []byte("blocking-file"), 0600)
+	if err := SaveAgentConfig(cfgSecret, failSecretPaths); err == nil {
+		t.Errorf("expected SaveAgentConfig to fail when secret directory cannot be created")
+	}
+
+	// 5b. SaveAgentConfig fails when signing-key.pem cannot be written (signing-key.pem is a directory)
+	failKeyPaths := paths
+	cfgKeyDir, _ := NewAgentConfig("keydir-agent", "base", "worker")
+	_ = os.MkdirAll(filepath.Join(paths.SecretsDir, "keydir-agent", "signing-key.pem"), 0755)
+	if err := SaveAgentConfig(cfgKeyDir, failKeyPaths); err == nil {
+		t.Errorf("expected SaveAgentConfig to fail when signing-key.pem is a directory")
+	}
+
+	// 6. SaveAgentConfig fails when agent JSON file cannot be written (jsonPath is a directory)
+	failJSONPaths := paths
+	_ = os.MkdirAll(filepath.Join(paths.AgentsDir, "dir-json.json"), 0755)
+	cfgJSONDir, _ := NewAgentConfig("dir-json", "base", "worker")
+	if err := SaveAgentConfig(cfgJSONDir, failJSONPaths); err == nil {
+		t.Errorf("expected SaveAgentConfig to fail when jsonPath is a directory")
+	}
+}

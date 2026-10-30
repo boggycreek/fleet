@@ -220,9 +220,7 @@ func StartZombieReaper(ctx context.Context, logger *Logger) {
 						break
 					}
 					isManaged := runtime.IsManagedChildPID(pid)
-					if isManaged {
-						runtime.RecordReapedExit(pid, ws.ExitStatus())
-					}
+					runtime.RecordReapedExit(pid, ws.ExitStatus())
 					if logger != nil {
 						logger.Log("DEBUG", "Reaped child process", map[string]any{
 							"pid":      pid,
@@ -266,6 +264,13 @@ func Run(ctx context.Context, cfg *Config, out io.Writer) error {
 	}
 
 	// Register any configured MCP server binaries
+	var mcpClients []*tools.MCPClient
+	defer func() {
+		for _, c := range mcpClients {
+			_ = c.Close()
+		}
+	}()
+
 	for _, binPath := range cfg.MCPBinaries {
 		mcpClient, err := tools.NewProcessMCPClient(runCtx, binPath)
 		if err != nil {
@@ -290,6 +295,7 @@ func Run(ctx context.Context, cfg *Config, out io.Writer) error {
 			continue
 		}
 
+		mcpClients = append(mcpClients, mcpClient)
 		for _, t := range mcpTools {
 			_ = reg.Register(t)
 		}
@@ -329,6 +335,7 @@ func Run(ctx context.Context, cfg *Config, out io.Writer) error {
 		if dialErr != nil {
 			logger.Log("WARN", "Failed to connect to Valkey", map[string]any{"addr": cfg.ValkeyAddr, "error": dialErr.Error()})
 		} else {
+			defer bpClient.Close()
 			resolver := gateway.NewBackplaneKeyResolver(bpClient)
 			verifier := gateway.NewVerifier(resolver)
 			gw := gateway.NewValkeyGateway(cfg.AgentName, bpClient, verifier, 1)
@@ -344,7 +351,7 @@ func Run(ctx context.Context, cfg *Config, out io.Writer) error {
 
 	// Run supervisor until context cancellation or worker error
 	err := supervisor.Start(runCtx)
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		logger.Log("ERROR", "Supervisor exited with error", map[string]any{"error": err.Error()})
 		return err
 	}
@@ -377,14 +384,12 @@ func runMain(ctx context.Context, args []string, out io.Writer) error {
 	return Run(ctx, cfg, out)
 }
 
-var osExit = os.Exit
-
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if err := runMain(ctx, os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		osExit(1)
+		os.Exit(1)
 	}
 }
