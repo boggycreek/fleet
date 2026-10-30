@@ -84,6 +84,8 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Establishes a universal, topology-agnostic backplane communication fabric governed by non-repudiable cryptographic identity, strict capability-bounded message streams, and stateless connection profile resolution. Supersedes ADR 00010 and ADR 00011.
 - **[00050 — Dev Container Security Screening, Diagnostics, and Privilege Escalation Sanitizer](00050-DevContainerSecurityScreeningAndPrivilegeEscalationSanitizer.md)**
   *Executive Summary:* Establishes automated static policy screening and sanitization for devcontainer.json configurations, proactively detecting and neutralizing privilege escalation vectors, forbidden capabilities, and dangerous host mounts before agent container instantiation.
+- **[00054 — Server-Side Valkey Stream Guard and Wire Inspection](00054-ServerSideValkeyStreamGuardWireInspection.md)**
+  *Executive Summary:* Evaluates and defines a server-side Valkey stream guard architecture using a transparent RESP proxy sidecar. Enforces wire-level inspection and strict boundary limits (MAXLEN capping on XADD, payload byte size thresholds, and canonical citation verification) to prevent DoS attacks and bypass of client-side guards by untrusted agent processes.
 
 ### Network Isolation & Perimeter Defense (`THEME-NETWORKING`)
 - **[00013 — Per-Instance Network Isolation](00013-PerInstanceNetworkIsolation.md)**  

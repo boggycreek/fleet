@@ -20,6 +20,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[OpenClaw Concurrency Evaluation](openclaw-concurrency-patterns.md)** (`fleet-openclaw-evaluation`): Comparative architectural analysis of OpenClaw cognitive/concurrency patterns against Fleet's native Go agent runtime (ADR 00041).
 - **[Memory Subsystem Specification & Architecture](memory-subsystem-spec.md)** (`fleet-memory-subsystem-spec`): Standardizing agent cognitive memory across Fleet and Lokol platforms, 5 cognitive pillars, 3-tier progressive disclosure, MCP contracts, and sync strategy.
 - **[Valkey Pub/Sub Evaluation](valkey-pubsub-evaluation.md)** (`fleet-valkey-pubsub-evaluation`): Trade-off evaluation, hybrid push-wakeup architecture, Sharded Pub/Sub, ACL security, and roadmap for backplane push notifications.
+- **[Server-Side Valkey Stream Guard Evaluation](valkey-stream-guard-evaluation.md)** (`fleet-valkey-stream-guard-evaluation`): Comparative evaluation of server-side Go proxy sidecar vs. native C module for RESP wire-level inspection and DoS protection (ADR 00054).
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.
