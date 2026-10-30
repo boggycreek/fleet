@@ -58,6 +58,8 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Establishes a zero-dependency static platform artifact OCI image (fleet-artifacts:latest / agent-sandbox-artifacts:latest) enabling seamless injection of Fleet's core platform binaries and tooling into arbitrary base images (Bring Your Own Image) without requiring OS-level package managers.
 - **[00049 — Composable Headless Native Agent Cognitive Engine Artifact Layer](00049-ComposableHeadlessNativeAgentCognitiveEngineArtifactLayer.md)**
   *Executive Summary:* Establishes a dedicated, zero-dependency static cognitive engine artifact OCI image (`fleet-native-engine:latest`) containing the headless `fleet-agent` cognitive daemon and native entrypoints for zero-friction composition into any developer toolchain base image.
+- **[00051 — Dev Container to Portable Dockerfile Transformation and Fleet Image CLI Domain](00051-DevContainerToPortableDockerfileTransformationAndFleetImageCli.md)**
+  *Executive Summary:* Establishes the fleet image CLI domain and declarative compilation pipeline transforming devcontainer.json configurations into portable, source-controlled Containerfiles pre-composed with selected Fleet platform and cognitive engine artifact layers.
 
 ### Agent Lifecycle & Process Model (`THEME-LIFECYCLE`)
 - **[00007 — Agent Lifecycle Phase Separation](00007-AgentLifecyclePhaseSeparation.md)**  
