@@ -60,6 +60,7 @@ For in-depth architectural specifications and operational protocols, refer to th
 - **[Testing Guidelines & Coverage Gates](doc/ai/testing-guidelines.md)**: Strict >=90% test coverage enforcement, rootless Podman cleanup patterns, containerized smoke testing.
 - **[Diagnostic Doctor & Auto-Healing](doc/ai/doctor-diagnostics.md)**: `fleet agent doctor` and `fleet infra doctor` diagnostic checks and self-healing.
 - **[Code Review Protocol](doc/ai/code-review.md)**: Architectural, logical, and security review methodology, inspection checklist, and PR reporting format.
+- **[Jules Collaboration & PR Review Protocol](doc/ai/jules-collaboration.md)**: Delegating tasks via GitHub issues, monitoring progress, and conducting adversarial PR reviews.
 - **[Workstation Setup & Contributor Guide](CONTRIBUTING.md)**: Automated `setup.sh`, XDG multi-version Go management, `--doctor` health check, quality gates, and Beads (`bd`) task tracking.
 
 ---

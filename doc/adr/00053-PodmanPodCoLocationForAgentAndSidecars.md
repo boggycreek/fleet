@@ -3,9 +3,9 @@ adr: "00053"
 title: "Evaluate Podman Pod Co-location for Agent and Sidecars"
 topic: "Network Isolation & Perimeter Defense"
 theme: "THEME-NETWORKING"
-status: "proposed"
+status: "accepted"
 version: "v0.1.0-alpha"
-as_built: false
+as_built: true
 tags:
   - networking
   - podman
@@ -55,7 +55,7 @@ Containers join the pod via the `--pod fleet-<name>` argument:
 - **Egress Interception**: Outbound network connections originating from the agent container inside the pod share the netns with the egress sidecar, allowing `nftables` / `iptables` socket filtering or local loopback proxying (`HTTP_PROXY=127.0.0.1:3128`) without leaving the network namespace.
 - **Port Namespace Ownership**: Port mappings (`-p 127.0.0.1::2222`) are bound to the pod infrastructure container rather than individual member containers.
 
-### 2. Lifecycle Orchestration (`sandbox/pkg/runtime/podman.go`)
+### 2. Lifecycle Orchestration (`cli/pkg/runtime/podman.go`)
 
 Transitioning from standalone containers to Podman pods alters the Go runtime execution flow:
 
@@ -79,7 +79,7 @@ podman pod create --name fleet-<name> --network fleet-infra -p 127.0.0.1::2222
 ```
 
 - **Port Inspection**: `podman pod inspect fleet-<name>` or `podman port fleet-<name> 2222` exposes the host-assigned ephemeral port (e.g., `127.0.0.1:34521`).
-- **Compatibility**: `GetAgentSSHPort()` in `sandbox/pkg/runtime/podman.go` inspects the pod or member container. OpenSSH host blocks in `~/.local/share/fleet/ssh_config` (`Host fleet-<name>`) and thin-client IDE attachment via `fleet agent open` function identically without contract changes.
+- **Compatibility**: `GetAgentSSHPort()` in `cli/pkg/runtime/podman.go` inspects the pod or member container. OpenSSH host blocks in `~/.local/share/fleet/ssh_config` (`Host fleet-<name>`) and thin-client IDE attachment via `fleet agent open` function identically without contract changes.
 
 ### 4. Volume & Persistence Bounds
 
@@ -90,7 +90,7 @@ Persistent volume bounds ([ADR 00005](00005-PersistedHomeVolumeAcrossRecreation.
 ### 5. Migration Strategy & Recommendations
 
 #### Migration Phases:
-1. **Phase 1 (Experimental Pod Flag)**: Introduce `--use-pod` flag in `fleet agent start` / `fleet agent create` and `sandbox/pkg/runtime` to create pod-backed agent instances alongside existing standalone containers.
+1. **Phase 1 (Experimental Pod Flag)**: Introduce `--use-pod` flag in `fleet agent start` / `fleet agent create` and `cli/pkg/runtime` to create pod-backed agent instances alongside existing standalone containers.
 2. **Phase 2 (Default Pod Orchestration)**: Transition default runtime methods (`StartAgentContainer`, `StopAgentContainer`, `CleanAgentContainer`) to manage `fleet-<name>` pods, maintaining fallback inspection for standalone legacy containers.
 3. **Phase 3 (Deprecation of Standalone Mode)**: Require pod orchestration across all agent deployments.
 
@@ -100,7 +100,7 @@ Fleet adopts **Podman Pod Co-location as the target architecture** for agent con
 
 1. **Pod Unit Standard**: Every agent instance is encapsulated within a dedicated Podman pod named `fleet-<name>`.
 2. **Shared Netns & Loopback**: The main agent container (`fleet-agent-<name>`) and egress sidecar container (`fleet-agent-<name>-egress`) run within `--pod fleet-<name>`, communicating via shared netns and loopback `127.0.0.1`.
-3. **Atomic Operations**: Runtime methods in `sandbox/pkg/runtime/podman.go` manage pod lifecycle (`podman pod create`, `start`, `stop`, `rm`) rather than disconnected standalone container operations.
+3. **Atomic Operations**: Runtime methods in `cli/pkg/runtime/podman.go` manage pod lifecycle (`podman pod create`, `start`, `stop`, `rm`) rather than disconnected standalone container operations.
 4. **Port Mapping Placement**: Ephemeral host SSH port mapping (`-p 127.0.0.1::2222`) is declared at pod creation time.
 
 ## Status

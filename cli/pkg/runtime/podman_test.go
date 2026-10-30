@@ -683,3 +683,367 @@ func TestStartAgentContainer_ModelURLAddHost(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentPodHelpers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 1. Test AgentPodName normalization
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"bob", "fleet-bob"},
+		{"fleet-agent-bob", "fleet-bob"},
+		{"fleet-bob", "fleet-bob"},
+		{"sndbx-agent-bob", "fleet-bob"},
+		{"sndbx-bob", "fleet-bob"},
+		{"fleet-agent-alice-egress", "fleet-alice"},
+		{"fleet-agent-charlie-home", "fleet-charlie"},
+	}
+	for _, c := range cases {
+		got := AgentPodName(c.input)
+		if got != c.expected {
+			t.Errorf("AgentPodName(%q) = %q; expected %q", c.input, got, c.expected)
+		}
+	}
+
+	// 2. Test AgentPodExists & EnsureAgentPod with mocks
+	var createdPodArgs []string
+	restore := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "exists" {
+			if args[2] == "fleet-existing" {
+				return exec.Command("true")
+			}
+			return exec.Command("false")
+		}
+		if len(args) >= 2 && args[0] == "pod" && args[1] == "create" {
+			createdPodArgs = args
+			return exec.Command("true")
+		}
+		return exec.Command("true")
+	})
+	defer restore()
+
+	if !AgentPodExists(ctx, "fleet-existing") {
+		t.Errorf("expected fleet-existing pod to exist")
+	}
+	if AgentPodExists(ctx, "fleet-nonexistent") {
+		t.Errorf("expected fleet-nonexistent pod not to exist")
+	}
+
+	// EnsureAgentPod on existing pod should be a no-op
+	if err := EnsureAgentPod(ctx, "fleet-existing"); err != nil {
+		t.Fatalf("unexpected error on existing pod: %v", err)
+	}
+	if len(createdPodArgs) > 0 {
+		t.Errorf("expected no pod create call for existing pod")
+	}
+
+	// EnsureAgentPod on new pod should invoke pod create
+	if err := EnsureAgentPod(ctx, "fleet-new", "llm-gateway:host-gateway"); err != nil {
+		t.Fatalf("unexpected error creating new pod: %v", err)
+	}
+	hasAddHost := false
+	for _, arg := range createdPodArgs {
+		if arg == "--add-host=llm-gateway:host-gateway" {
+			hasAddHost = true
+		}
+	}
+	if !hasAddHost {
+		t.Errorf("expected --add-host flag on pod create, got args: %v", createdPodArgs)
+	}
+}
+
+func TestEnsureAgentPod_Errors(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Failure case
+	restoreFail := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "exists" {
+			return exec.Command("false")
+		}
+		if len(args) >= 2 && args[0] == "pod" && args[1] == "create" {
+			return exec.Command("bash", "-c", "echo 'permission denied' >&2; exit 1")
+		}
+		return exec.Command("true")
+	})
+	defer restoreFail()
+
+	err := EnsureAgentPod(ctx, "fleet-fail")
+	if err == nil {
+		t.Errorf("expected error when pod create fails")
+	}
+
+	// Netns error retry case
+	attempt := 0
+	restoreRetry := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "exists" {
+			return exec.Command("false")
+		}
+		if len(args) >= 2 && args[0] == "pod" && args[1] == "create" {
+			attempt++
+			if attempt == 1 {
+				return exec.Command("bash", "-c", "echo 'failed to mount runtime directory for rootless netns: permission denied' >&2; exit 1")
+			}
+			return exec.Command("true")
+		}
+		return exec.Command("true")
+	})
+	defer restoreRetry()
+
+	if err := EnsureAgentPod(ctx, "fleet-retry"); err != nil {
+		t.Errorf("expected EnsureAgentPod to heal and succeed on retry, got: %v", err)
+	}
+}
+
+func TestInspectAgentPod(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fakeInspectJSON := `{
+		"Id": "abc12345",
+		"Name": "fleet-dave",
+		"State": "Running",
+		"InfraConfig": {
+			"PortBindings": {
+				"2222/tcp": [
+					{"HostIp": "127.0.0.1", "HostPort": "39999"}
+				]
+			}
+		}
+	}`
+
+	restore := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "inspect" {
+			if args[2] == "fleet-dave" {
+				return exec.Command("echo", fakeInspectJSON)
+			}
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	})
+	defer restore()
+
+	info, err := InspectAgentPod(ctx, "fleet-dave")
+	if err != nil {
+		t.Fatalf("InspectAgentPod failed: %v", err)
+	}
+	if info.ID != "abc12345" || info.Name != "fleet-dave" || info.State != "Running" {
+		t.Errorf("unexpected pod info: %+v", info)
+	}
+	if len(info.Ports) != 1 || info.Ports[0].HostPort != 39999 || info.Ports[0].ContainerPort != 2222 {
+		t.Errorf("unexpected ports in pod info: %+v", info.Ports)
+	}
+
+	// Error path: nonexistent pod
+	_, err = InspectAgentPod(ctx, "fleet-unknown")
+	if err == nil {
+		t.Errorf("expected error inspecting nonexistent pod")
+	}
+}
+
+func TestGetAgentSSHPort_PodFallback(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fakeInspectJSON := `{
+		"Id": "xyz9876",
+		"Name": "fleet-eve",
+		"State": "Running",
+		"InfraConfig": {
+			"PortBindings": {
+				"2222/tcp": [
+					{"HostIp": "127.0.0.1", "HostPort": "34567"}
+				]
+			}
+		}
+	}`
+
+	restore := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 2 && args[0] == "port" {
+			// Container port lookup fails
+			return exec.Command("false")
+		}
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "exists" {
+			if args[2] == "fleet-eve" {
+				return exec.Command("true")
+			}
+			return exec.Command("false")
+		}
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "inspect" {
+			if args[2] == "fleet-eve" {
+				return exec.Command("echo", fakeInspectJSON)
+			}
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	})
+	defer restore()
+
+	port, err := GetAgentSSHPort(ctx, "fleet-agent-eve")
+	if err != nil {
+		t.Fatalf("GetAgentSSHPort failed: %v", err)
+	}
+	if port != 34567 {
+		t.Errorf("expected port 34567 from pod fallback, got %d", port)
+	}
+}
+
+func TestStartAgentContainer_PodMode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var podCreated bool
+	var runArgs []string
+
+	restore := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "exists" {
+			if podCreated {
+				return exec.Command("true")
+			}
+			return exec.Command("false")
+		}
+		if len(args) >= 2 && args[0] == "pod" && args[1] == "create" {
+			podCreated = true
+			return exec.Command("true")
+		}
+		if len(args) >= 3 && args[0] == "container" && args[1] == "exists" {
+			return exec.Command("false")
+		}
+		if len(args) > 0 && args[0] == "run" {
+			runArgs = args
+			return exec.Command("true")
+		}
+		return exec.Command("true")
+	})
+	defer restore()
+
+	cfg := &config.AgentConfig{
+		Name:          "frank",
+		ContainerName: "fleet-agent-frank",
+		VolumeName:    "fleet-agent-frank-home",
+		Image:         "fleet-base:latest",
+		UsePod:        true,
+		ModelURL:      "http://localhost:11434/v1",
+	}
+
+	paths := config.GetPaths()
+	if err := StartAgentContainer(ctx, cfg, paths, "127.0.0.1", 6379); err != nil {
+		t.Fatalf("StartAgentContainer failed in pod mode: %v", err)
+	}
+
+	if !podCreated {
+		t.Errorf("expected pod to be created")
+	}
+
+	// Verify runArgs contains --pod fleet-frank and does NOT contain --network or -p or --add-host
+	hasPod := false
+	hasNetwork := false
+	hasPort := false
+	hasAddHost := false
+	for i, arg := range runArgs {
+		if arg == "--pod" && i+1 < len(runArgs) && runArgs[i+1] == "fleet-frank" {
+			hasPod = true
+		}
+		if arg == "--network" {
+			hasNetwork = true
+		}
+		if arg == "-p" {
+			hasPort = true
+		}
+		if arg == "--add-host" {
+			hasAddHost = true
+		}
+	}
+
+	if !hasPod {
+		t.Errorf("expected --pod fleet-frank in runArgs, got: %v", runArgs)
+	}
+	if hasNetwork {
+		t.Errorf("expected no --network flag in pod container run, got: %v", runArgs)
+	}
+	if hasPort {
+		t.Errorf("expected no -p flag in pod container run, got: %v", runArgs)
+	}
+	if hasAddHost {
+		t.Errorf("expected no --add-host flag on container in pod mode, got: %v", runArgs)
+	}
+}
+
+func TestStartEgressFilterContainer_PodMode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var egressRunArgs []string
+
+	restore := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 3 && args[0] == "container" && args[1] == "exists" {
+			return exec.Command("false")
+		}
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "exists" {
+			if args[2] == "fleet-grace" {
+				return exec.Command("true")
+			}
+			return exec.Command("false")
+		}
+		if len(args) > 0 && args[0] == "run" {
+			egressRunArgs = args
+			return exec.Command("true")
+		}
+		return exec.Command("true")
+	})
+	defer restore()
+
+	if err := StartEgressFilterContainer(ctx, "grace"); err != nil {
+		t.Fatalf("StartEgressFilterContainer failed: %v", err)
+	}
+
+	hasPod := false
+	for i, arg := range egressRunArgs {
+		if arg == "--pod" && i+1 < len(egressRunArgs) && egressRunArgs[i+1] == "fleet-grace" {
+			hasPod = true
+		}
+	}
+	if !hasPod {
+		t.Errorf("expected egress filter to join --pod fleet-grace, got: %v", egressRunArgs)
+	}
+}
+
+func TestStopAndCleanAgentContainer_PodMode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var podStopped, podRemoved bool
+
+	restore := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "exists" {
+			return exec.Command("true")
+		}
+		if len(args) >= 3 && args[0] == "pod" && args[1] == "stop" && args[2] == "fleet-hank" {
+			podStopped = true
+			return exec.Command("true")
+		}
+		if len(args) >= 4 && args[0] == "pod" && args[1] == "rm" && args[2] == "-f" && args[3] == "fleet-hank" {
+			podRemoved = true
+			return exec.Command("true")
+		}
+		return exec.Command("true")
+	})
+	defer restore()
+
+	if err := StopAgentContainer(ctx, "fleet-agent-hank"); err != nil {
+		t.Fatalf("StopAgentContainer failed: %v", err)
+	}
+	if !podStopped {
+		t.Errorf("expected pod to be stopped")
+	}
+
+	if err := CleanAgentContainer(ctx, "fleet-agent-hank"); err != nil {
+		t.Fatalf("CleanAgentContainer failed: %v", err)
+	}
+	if !podRemoved {
+		t.Errorf("expected pod to be removed")
+	}
+}

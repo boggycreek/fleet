@@ -52,9 +52,27 @@ type AgentConfig struct {
 	ModelName     string    `json:"model_name,omitempty"`
 	ModelAPIKey   string    `json:"model_api_key,omitempty"`
 	SonarToken    string    `json:"sonar_token,omitempty"`
+	PodName       string    `json:"pod_name,omitempty"`
+	UsePod        bool      `json:"use_pod,omitempty"`
 	Runtime       string    `json:"runtime,omitempty"` // "container" (default), "host-container", or "no-container"
 	HostOnly      bool      `json:"host_only,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+// GetPodName returns the dedicated Podman pod name for the agent.
+func (c *AgentConfig) GetPodName() string {
+	if c.PodName != "" {
+		return c.PodName
+	}
+	return fmt.Sprintf("fleet-%s", c.Name)
+}
+
+// UsePods returns true if the agent is configured to run inside a Podman pod.
+func (c *AgentConfig) UsePods() bool {
+	if c.UsePod {
+		return true
+	}
+	return os.Getenv("FLEET_ENABLE_PODS") == "1"
 }
 
 // IsNoContainer returns true if the agent runs directly on the host without any container.
@@ -146,6 +164,7 @@ func NewAgentConfig(name, imageInput, role string, modelOpts ...string) (*AgentC
 		Role:          role,
 		Image:         ResolveImage(imageInput),
 		ContainerName: fmt.Sprintf("fleet-agent-%s", name),
+		PodName:       fmt.Sprintf("fleet-%s", name),
 		VolumeName:    fmt.Sprintf("fleet-agent-%s-home", name),
 		Password:      password,
 		SigningKeyPEM: pemStr,

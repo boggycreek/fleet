@@ -110,7 +110,7 @@ podman pod inspect fleet-demo --format '{{range .InfraConfig.PortBindings}}{{ran
 ```
 
 #### OpenSSH & IDE Integration Compatibility
-In `sandbox/pkg/runtime/podman.go`, `GetAgentSSHPort()` queries `podman port <pod-or-container-name> 2222`.
+In `cli/pkg/runtime/podman.go`, `GetAgentSSHPort()` queries `podman port <pod-or-container-name> 2222`.
 
 - **SSH Config Sync** (`fleet agent ssh-config`): Generates host blocks pointing to `127.0.0.1:<discovered_port>` targeting `~/.local/share/fleet/ssh_config`.
 - **One-Shot IDE Launching** (`fleet agent open`): Connects seamlessly via OpenSSH host entry `fleet-<name>` ([ADR 00016](../adr/00016-OneShotIdeRemoteDevelopmentAndHostEnsembling.md)).
@@ -125,7 +125,7 @@ Co-locating containers in a pod **does not** automatically share filesystems or 
 
 ---
 
-### 4. Lifecycle Methods in Go Runtime (`sandbox/pkg/runtime/podman.go`)
+### 4. Lifecycle Methods in Go Runtime (`cli/pkg/runtime/podman.go`)
 
 Below is a comparison of runtime implementation patterns in Go:
 

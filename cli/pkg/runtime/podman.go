@@ -127,6 +127,132 @@ func EgressContainerName(name string) string {
 	return fmt.Sprintf("fleet-agent-%s-egress", clean)
 }
 
+// AgentPodName returns the dedicated Podman pod name for an agent or container name (ADR 00053).
+func AgentPodName(name string) string {
+	clean := strings.TrimSpace(name)
+	clean = strings.TrimPrefix(clean, "fleet-agent-")
+	clean = strings.TrimPrefix(clean, "fleet-")
+	clean = strings.TrimPrefix(clean, "sndbx-agent-")
+	clean = strings.TrimPrefix(clean, "sndbx-")
+	clean = strings.TrimSuffix(clean, "-egress")
+	clean = strings.TrimSuffix(clean, "-home")
+	return fmt.Sprintf("fleet-%s", clean)
+}
+
+// AgentPodExists checks if a Podman pod exists by name.
+func AgentPodExists(ctx context.Context, podName string) bool {
+	cmd := CommandContext(ctx, "podman", "pod", "exists", podName)
+	return cmd.Run() == nil
+}
+
+// EnsureAgentPod creates a Podman pod if it does not already exist (ADR 00053).
+// Declares network fleet-infra and host port mapping 127.0.0.1::2222.
+func EnsureAgentPod(ctx context.Context, podName string, addHosts ...string) error {
+	if AgentPodExists(ctx, podName) {
+		return nil
+	}
+	netName := infraNetwork
+	_ = EnsureNetwork(ctx, netName)
+
+	args := []string{
+		"pod", "create",
+		"--name", podName,
+		"--network", netName,
+		"-p", "127.0.0.1::2222",
+	}
+	for _, host := range addHosts {
+		if host != "" {
+			args = append(args, fmt.Sprintf("--add-host=%s", host))
+		}
+	}
+
+	cmd := CommandContext(ctx, "podman", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if IsRootlessNetnsError(err, out) {
+			_ = EnsureRootlessNetNS(ctx)
+			retryCmd := CommandContext(ctx, "podman", args...)
+			if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
+				return fmt.Errorf("failed creating pod %s: %v (%s)", podName, retryErr, string(retryOut))
+			}
+			return nil
+		}
+		return fmt.Errorf("failed creating pod %s: %v (%s)", podName, err, string(out))
+	}
+	return nil
+}
+
+// PodInfo summarizes the runtime state of a Podman pod (ADR 00053).
+type PodInfo struct {
+	ID    string        `json:"id"`
+	Name  string        `json:"name"`
+	State string        `json:"state"`
+	Ports []PortMapping `json:"ports,omitempty"`
+}
+
+// InspectAgentPod returns state summary for an agent pod (ADR 00053).
+func InspectAgentPod(ctx context.Context, podName string) (*PodInfo, error) {
+	cmd := CommandContext(ctx, "podman", "pod", "inspect", podName)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	var raw struct {
+		ID          string `json:"Id"`
+		Name        string `json:"Name"`
+		State       string `json:"State"`
+		InfraConfig struct {
+			PortBindings map[string][]struct {
+				HostPort string `json:"HostPort"`
+				HostIP   string `json:"HostIp"`
+			} `json:"PortBindings"`
+		} `json:"InfraConfig"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
+		return nil, err
+	}
+	info := &PodInfo{
+		ID:    raw.ID,
+		Name:  raw.Name,
+		State: raw.State,
+	}
+	for containerPortStr, bindings := range raw.InfraConfig.PortBindings {
+		parts := strings.Split(containerPortStr, "/")
+		cPort, _ := strconv.Atoi(parts[0])
+		for _, b := range bindings {
+			hPort, _ := strconv.Atoi(b.HostPort)
+			info.Ports = append(info.Ports, PortMapping{
+				HostIP:        b.HostIP,
+				HostPort:      hPort,
+				ContainerPort: cPort,
+			})
+		}
+	}
+	return info, nil
+}
+
+func getPodSSHPort(ctx context.Context, podName string) (int, error) {
+	cmd := CommandContext(ctx, "podman", "pod", "inspect", podName)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+	var podInfo struct {
+		InfraConfig struct {
+			PortBindings map[string][]struct {
+				HostPort string `json:"HostPort"`
+			} `json:"PortBindings"`
+		} `json:"InfraConfig"`
+	}
+	if err := json.Unmarshal(out, &podInfo); err != nil {
+		return 0, err
+	}
+	if bindings, ok := podInfo.InfraConfig.PortBindings["2222/tcp"]; ok && len(bindings) > 0 {
+		return strconv.Atoi(bindings[0].HostPort)
+	}
+	return 0, fmt.Errorf("no port 2222 mapping found in pod %s", podName)
+}
+
 // ResolveAgentImage resolves an image input according to ADR 00029 & ADR 00051:
 // 1. Well-known presets (base, opencode, claude, agy, egress)
 // 2. Local Podman store images (matching local tags, localhost/ prefix, or custom fleet-* tags)
@@ -238,8 +364,7 @@ func CleanAgentKnownHosts(name string, paths config.Paths) {
 // StartEgressFilterContainer starts or creates the companion egress filter sidecar container for an agent.
 func StartEgressFilterContainer(ctx context.Context, agentOrContainerName string) error {
 	egressName := EgressContainerName(agentOrContainerName)
-	netName := infraNetwork
-	_ = EnsureNetwork(ctx, netName)
+	podName := AgentPodName(agentOrContainerName)
 
 	// Check if container already exists
 	checkCmd := CommandContext(ctx, "podman", "container", "exists", egressName)
@@ -260,15 +385,30 @@ func StartEgressFilterContainer(ctx context.Context, agentOrContainerName string
 		return nil
 	}
 
-	args := []string{
-		"run", "-d",
-		"--name", egressName,
-		"--hostname", egressName,
-		"--network", netName,
-		"--cap-add", "NET_ADMIN",
-		"--cap-add", "NET_RAW",
-		"-p", "127.0.0.1::2222",
-		EgressImage,
+	var args []string
+	if AgentPodExists(ctx, podName) {
+		args = []string{
+			"run", "-d",
+			"--pod", podName,
+			"--name", egressName,
+			"--hostname", egressName,
+			"--cap-add", "NET_ADMIN",
+			"--cap-add", "NET_RAW",
+			EgressImage,
+		}
+	} else {
+		netName := infraNetwork
+		_ = EnsureNetwork(ctx, netName)
+		args = []string{
+			"run", "-d",
+			"--name", egressName,
+			"--hostname", egressName,
+			"--network", netName,
+			"--cap-add", "NET_ADMIN",
+			"--cap-add", "NET_RAW",
+			"-p", "127.0.0.1::2222",
+			EgressImage,
+		}
 	}
 
 	cmd := CommandContext(ctx, "podman", args...)
@@ -330,6 +470,31 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 	if cfg.IsHostContainer() {
 		return startHostAgentContainer(ctx, cfg, paths, bpHost, bpPort)
 	}
+
+	isLocalModelURL := func(murl string) bool {
+		if murl == "" {
+			return false
+		}
+		u, err := url.Parse(murl)
+		if err != nil {
+			return false
+		}
+		host := u.Hostname()
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	}
+
+	usePod := cfg.UsePods()
+	podName := cfg.GetPodName()
+	if usePod {
+		var addHosts []string
+		if isLocalModelURL(cfg.ModelURL) {
+			addHosts = append(addHosts, "llm-gateway:host-gateway")
+		}
+		if err := EnsureAgentPod(ctx, podName, addHosts...); err != nil {
+			return err
+		}
+	}
+
 	netName := infraNetwork
 	_ = EnsureNetwork(ctx, netName)
 	_ = EnsureVolume(ctx, cfg.VolumeName)
@@ -367,38 +532,45 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 		containerBPHost = infraValkeyContainer
 	}
 
-	isLocalModelURL := func(murl string) bool {
-		if murl == "" {
-			return false
+	var args []string
+	if usePod {
+		args = []string{
+			"run", "-d",
+			"--pod", podName,
+			"--name", cfg.ContainerName,
+			"--hostname", fmt.Sprintf("%s-sandbox", cfg.Name),
+			"-e", fmt.Sprintf("AGENT_NAME=%s", cfg.Name),
+			"-e", fmt.Sprintf("AGENT_ROLE=%s", cfg.Role),
+			"-e", fmt.Sprintf("ROLE=%s", cfg.Role),
+			"-e", fmt.Sprintf("BP_AGENT=%s", cfg.Name),
+			"-e", "BP_PASSWORD",
+			"-e", fmt.Sprintf("BP_HOST=%s", containerBPHost),
+			"-e", fmt.Sprintf("BP_PORT=%d", bpPort),
+			"-e", "BP_SIGNING_KEY_PEM",
+			"-e", fmt.Sprintf("VALKEY_ADDR=%s:%d", containerBPHost, bpPort),
+			"-e", "VALKEY_PASSWORD",
 		}
-		u, err := url.Parse(murl)
-		if err != nil {
-			return false
+	} else {
+		args = []string{
+			"run", "-d",
+			"--name", cfg.ContainerName,
+			"--hostname", fmt.Sprintf("%s-sandbox", cfg.Name),
+			"--network", netName,
+			"-p", "127.0.0.1::2222",
+			"-e", fmt.Sprintf("AGENT_NAME=%s", cfg.Name),
+			"-e", fmt.Sprintf("AGENT_ROLE=%s", cfg.Role),
+			"-e", fmt.Sprintf("ROLE=%s", cfg.Role),
+			"-e", fmt.Sprintf("BP_AGENT=%s", cfg.Name),
+			"-e", "BP_PASSWORD",
+			"-e", fmt.Sprintf("BP_HOST=%s", containerBPHost),
+			"-e", fmt.Sprintf("BP_PORT=%d", bpPort),
+			"-e", "BP_SIGNING_KEY_PEM",
+			"-e", fmt.Sprintf("VALKEY_ADDR=%s:%d", containerBPHost, bpPort),
+			"-e", "VALKEY_PASSWORD",
 		}
-		host := u.Hostname()
-		return host == "localhost" || host == "127.0.0.1" || host == "::1"
-	}
-
-	args := []string{
-		"run", "-d",
-		"--name", cfg.ContainerName,
-		"--hostname", fmt.Sprintf("%s-sandbox", cfg.Name),
-		"--network", netName,
-		"-p", "127.0.0.1::2222",
-		"-e", fmt.Sprintf("AGENT_NAME=%s", cfg.Name),
-		"-e", fmt.Sprintf("AGENT_ROLE=%s", cfg.Role),
-		"-e", fmt.Sprintf("ROLE=%s", cfg.Role),
-		"-e", fmt.Sprintf("BP_AGENT=%s", cfg.Name),
-		"-e", "BP_PASSWORD",
-		"-e", fmt.Sprintf("BP_HOST=%s", containerBPHost),
-		"-e", fmt.Sprintf("BP_PORT=%d", bpPort),
-		"-e", "BP_SIGNING_KEY_PEM",
-		"-e", fmt.Sprintf("VALKEY_ADDR=%s:%d", containerBPHost, bpPort),
-		"-e", "VALKEY_PASSWORD",
-	}
-
-	if isLocalModelURL(cfg.ModelURL) {
-		args = append(args, "--add-host", "llm-gateway:host-gateway")
+		if isLocalModelURL(cfg.ModelURL) {
+			args = append(args, "--add-host", "llm-gateway:host-gateway")
+		}
 	}
 
 	extraEnv := []string{
@@ -621,15 +793,25 @@ func startHostAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths
 	return nil
 }
 
-// StopAgentContainer stops a running container
+// StopAgentContainer stops a running container or pod (ADR 00053).
 func StopAgentContainer(ctx context.Context, containerName string) error {
+	podName := AgentPodName(containerName)
+	if AgentPodExists(ctx, podName) {
+		_ = CommandContext(ctx, "podman", "pod", "stop", podName).Run()
+	}
 	cmd := CommandContext(ctx, "podman", "stop", containerName)
 	return cmd.Run()
 }
 
-// CleanAgentContainer removes a container while keeping the named volume
+// CleanAgentContainer removes a container or pod while keeping the named volume (ADR 00053).
 func CleanAgentContainer(ctx context.Context, containerName string) error {
 	_ = StopAgentContainer(ctx, containerName)
+
+	podName := AgentPodName(containerName)
+	if AgentPodExists(ctx, podName) {
+		_ = CommandContext(ctx, "podman", "pod", "rm", "-f", podName).Run()
+	}
+
 	cmd := CommandContext(ctx, "podman", "rm", "-f", containerName)
 	err := cmd.Run()
 
@@ -646,14 +828,15 @@ func CleanAgentContainer(ctx context.Context, containerName string) error {
 	return err
 }
 
-// DestroyAgentContainer removes container and persistent volume
+// DestroyAgentContainer removes container, pod, and persistent volume.
 func DestroyAgentContainer(ctx context.Context, containerName, volumeName string) error {
 	_ = CleanAgentContainer(ctx, containerName)
 	cmd := CommandContext(ctx, "podman", "volume", "rm", "-f", volumeName)
 	return cmd.Run()
 }
 
-// GetAgentSSHPort discovers the dynamically assigned host port mapping for port 2222
+// GetAgentSSHPort discovers the dynamically assigned host port mapping for port 2222.
+// Inspects container port, companion egress container, or pod port mapping (ADR 00053).
 func GetAgentSSHPort(ctx context.Context, containerName string) (int, error) {
 	cmd := CommandContext(ctx, "podman", "port", containerName, "2222")
 	out, err := cmd.Output()
@@ -664,6 +847,14 @@ func GetAgentSSHPort(ctx context.Context, containerName string) (int, error) {
 			if outEgress, errEgress := cmdEgress.Output(); errEgress == nil && len(strings.TrimSpace(string(outEgress))) > 0 {
 				out = outEgress
 				err = nil
+			}
+		}
+	}
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		podName := AgentPodName(containerName)
+		if AgentPodExists(ctx, podName) {
+			if port, podErr := getPodSSHPort(ctx, podName); podErr == nil && port > 0 {
+				return port, nil
 			}
 		}
 	}
