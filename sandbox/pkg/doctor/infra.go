@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
@@ -27,11 +28,12 @@ import (
 // infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, and infraSonarContainer are the expected shared infra container names.
 // These are package-level vars so integration tests can override them with ephemeral container names.
 var (
-	infraValkeyContainer   = "fleet-valkey"
-	infraForgejoContainer  = "fleet-forgejo"
-	infraGiteaContainer    = infraForgejoContainer
-	infraPostgresContainer = "fleet-postgres"
-	infraSonarContainer    = "fleet-sonarqube"
+	infraValkeyContainer     = "fleet-valkey"
+	infraForgejoContainer    = "fleet-forgejo"
+	infraGiteaContainer      = infraForgejoContainer
+	infraPostgresContainer   = "fleet-postgres"
+	infraSonarContainer      = "fleet-sonarqube"
+	infraOpenRouterContainer = "fleet-openrouter"
 )
 
 // DiagnoseAndHealInfra performs a comprehensive health check and auto-healing on shared infrastructure
@@ -60,6 +62,9 @@ func DiagnoseAndHealInfra(ctx context.Context, paths config.Paths) (*DoctorRepor
 
 	// 7. SonarQube Mechanical Analysis Container & Service
 	checkAndHealSonarContainer(ctx, paths, report)
+
+	// 8. OpenRouter Inference Gateway Proxy Container & Service
+	checkAndHealOpenRouterContainer(ctx, paths, report)
 
 	return report, nil
 }
@@ -489,4 +494,67 @@ func checkAndHealSonarContainer(ctx context.Context, paths config.Paths, report 
 		Message: fmt.Sprintf("Container %s, HTTP %s responsive (status: %s, admin: verified)", state, sonarURL, status.Status),
 	})
 	_ = client
+}
+
+func checkAndHealOpenRouterContainer(ctx context.Context, paths config.Paths, report *DoctorReport) {
+	keyFile := filepath.Join(paths.DataHome, "secrets", "openrouter.key")
+	openrouterKey := os.Getenv("OPENROUTER_API_KEY")
+	if openrouterKey == "" {
+		if data, err := os.ReadFile(keyFile); err == nil {
+			openrouterKey = strings.TrimSpace(string(data))
+		}
+	}
+
+	containerName := infraOpenRouterContainer
+	info, err := runtime.InspectAgentContainer(ctx, containerName)
+	state := "stopped"
+	if err == nil && info != nil {
+		state = info.State
+	}
+
+	if openrouterKey == "" && state == "stopped" {
+		report.Checks = append(report.Checks, CheckItem{
+			Name:    "OpenRouter Inference Gateway",
+			Status:  StatusOK,
+			Message: "OpenRouter inference gateway proxy not configured (optional: set OPENROUTER_API_KEY or configure secrets/openrouter.key)",
+		})
+		return
+	}
+
+	proxyHost := os.Getenv("OPENROUTER_HOST")
+	if proxyHost == "" {
+		proxyHost = "127.0.0.1"
+	}
+	proxyPort := os.Getenv("OPENROUTER_PORT")
+	if proxyPort == "" {
+		proxyPort = "8080"
+	}
+
+	dialer := net.Dialer{Timeout: 1 * time.Second}
+	conn, dialErr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(proxyHost, proxyPort))
+	if dialErr != nil {
+		if state == "running" {
+			report.Checks = append(report.Checks, CheckItem{
+				Name:    "OpenRouter Inference Gateway",
+				Status:  StatusWarning,
+				Message: fmt.Sprintf("OpenRouter proxy container is running but port %s is unreachable", proxyPort),
+			})
+			report.WarningCount++
+		} else {
+			report.Checks = append(report.Checks, CheckItem{
+				Name:    "OpenRouter Inference Gateway",
+				Status:  StatusWarning,
+				Message: fmt.Sprintf("OpenRouter proxy container is %s (start via `fleet infra up`)", state),
+			})
+			report.WarningCount++
+		}
+		return
+	}
+	_ = conn.Close()
+
+	report.Checks = append(report.Checks, CheckItem{
+		Name:    "OpenRouter Inference Gateway",
+		Status:  StatusOK,
+		Message: fmt.Sprintf("OpenRouter proxy container is %s and listening on %s:%s", state, proxyHost, proxyPort),
+	})
 }

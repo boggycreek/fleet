@@ -28,15 +28,16 @@ import (
 // EgressImage is the default OCI image for the network egress filter sidecar.
 const EgressImage = "fleet-egress:latest"
 
-// infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, and infraSonarContainer are the expected shared infra container names.
+// infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, infraSonarContainer, and infraOpenRouterContainer are the expected shared infra container names.
 // These are package-level vars so tests can override them with ephemeral container names.
 var (
-	infraValkeyContainer   = "fleet-valkey"
-	infraForgejoContainer  = "fleet-forgejo"
-	infraGiteaContainer    = infraForgejoContainer
-	infraPostgresContainer = "fleet-postgres"
-	infraSonarContainer    = "fleet-sonarqube"
-	infraNetwork           = "fleet-infra"
+	infraValkeyContainer     = "fleet-valkey"
+	infraForgejoContainer    = "fleet-forgejo"
+	infraGiteaContainer      = infraForgejoContainer
+	infraPostgresContainer   = "fleet-postgres"
+	infraSonarContainer      = "fleet-sonarqube"
+	infraOpenRouterContainer = "fleet-openrouter"
+	infraNetwork             = "fleet-infra"
 )
 
 // SetInfraNetworkForTest overrides infraNetwork for unit testing.
@@ -75,6 +76,15 @@ func SetInfraForgejoContainerForTest(name string) func() {
 	return func() {
 		infraForgejoContainer = orig
 		infraGiteaContainer = origGitea
+	}
+}
+
+// SetInfraOpenRouterContainerForTest overrides infraOpenRouterContainer for unit testing.
+func SetInfraOpenRouterContainerForTest(name string) func() {
+	orig := infraOpenRouterContainer
+	infraOpenRouterContainer = name
+	return func() {
+		infraOpenRouterContainer = orig
 	}
 }
 
@@ -402,8 +412,11 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 	args = append(args, "-e", fmt.Sprintf("HUMAN_NAME=%s", humanName))
 
 	if cfg.ModelURL != "" {
-		// Translate localhost / 127.0.0.1 to llm-gateway for container-to-host bridge access
 		containerModelURL := cfg.ModelURL
+		if containerModelURL == "openrouter" || containerModelURL == "http://openrouter" || containerModelURL == "openrouter-gateway" {
+			containerModelURL = "http://fleet-openrouter:8080/v1"
+		}
+		// Translate localhost / 127.0.0.1 to llm-gateway for container-to-host bridge access
 		containerModelURL = strings.ReplaceAll(containerModelURL, "://localhost", "://llm-gateway")
 		containerModelURL = strings.ReplaceAll(containerModelURL, "://127.0.0.1", "://llm-gateway")
 
@@ -558,8 +571,11 @@ func startHostAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths
 	args = append(args, "-e", fmt.Sprintf("HUMAN_NAME=%s", humanName))
 
 	if cfg.ModelURL != "" {
-		// Translate localhost / 127.0.0.1 to llm-gateway for container-to-host bridge access
 		containerModelURL := cfg.ModelURL
+		if containerModelURL == "openrouter" || containerModelURL == "http://openrouter" || containerModelURL == "openrouter-gateway" {
+			containerModelURL = "http://fleet-openrouter:8080/v1"
+		}
+		// Translate localhost / 127.0.0.1 to llm-gateway for container-to-host bridge access
 		containerModelURL = strings.ReplaceAll(containerModelURL, "://localhost", "://llm-gateway")
 		containerModelURL = strings.ReplaceAll(containerModelURL, "://127.0.0.1", "://llm-gateway")
 
@@ -1019,6 +1035,68 @@ user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* %%R
 		_ = BootstrapSonar(ctx, adminPass)
 	}
 
+	// 6. Start OpenRouter proxy container if image exists
+	openrouterKey := os.Getenv("OPENROUTER_API_KEY")
+	keyFile := filepath.Join(paths.DataHome, "secrets", "openrouter.key")
+	if openrouterKey == "" {
+		if data, err := os.ReadFile(keyFile); err == nil {
+			openrouterKey = strings.TrimSpace(string(data))
+		}
+	}
+
+	openrouterContainer := infraOpenRouterContainer
+	openrouterPort := os.Getenv("OPENROUTER_PORT")
+	if openrouterPort == "" {
+		openrouterPort = "8080"
+	}
+	openrouterArgs := []string{
+		"run", "-d",
+		"--name", openrouterContainer,
+		"--hostname", "fleet-openrouter",
+		"--network", netName,
+		"--network-alias", "fleet-openrouter",
+		"--network-alias", "openrouter-gateway",
+		"-p", fmt.Sprintf("127.0.0.1:%s:8080", openrouterPort),
+	}
+	if openrouterKey != "" {
+		openrouterArgs = append(openrouterArgs, "-e", fmt.Sprintf("OPENROUTER_API_KEY=%s", openrouterKey))
+	}
+	if _, err := os.Stat(keyFile); err == nil {
+		openrouterArgs = append(openrouterArgs, "-v", fmt.Sprintf("%s:/etc/fleet/secrets/openrouter.key:ro", keyFile))
+	}
+	openrouterArgs = append(openrouterArgs, "fleet-openrouter:latest")
+
+	checkOpenRouterImg := CommandContext(ctx, "podman", "image", "exists", "fleet-openrouter:latest")
+	if checkOpenRouterImg.Run() == nil {
+		checkProxy := CommandContext(ctx, "podman", "container", "exists", openrouterContainer)
+		if err := checkProxy.Run(); err != nil {
+			cmd := CommandContext(ctx, "podman", openrouterArgs...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				if IsRootlessNetnsError(err, out) {
+					_ = EnsureRootlessNetNS(ctx)
+					retryCmd := CommandContext(ctx, "podman", openrouterArgs...)
+					if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
+						return fmt.Errorf("failed starting openrouter proxy container: %v (%s)", retryErr, string(retryOut))
+					}
+				} else {
+					return fmt.Errorf("failed starting openrouter proxy container: %v (%s)", err, string(out))
+				}
+			}
+		} else {
+			startCmd := CommandContext(ctx, "podman", "start", openrouterContainer)
+			if startOut, err := startCmd.CombinedOutput(); err != nil {
+				_ = CommandContext(ctx, "podman", "rm", "-f", openrouterContainer).Run()
+				if IsRootlessNetnsError(err, startOut) {
+					_ = EnsureRootlessNetNS(ctx)
+				}
+				cmd := CommandContext(ctx, "podman", openrouterArgs...)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					return fmt.Errorf("failed restarting openrouter proxy container: %v (%s)", err, string(out))
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1219,12 +1297,13 @@ func StopInfraStack(ctx context.Context) error {
 	_ = CommandContext(ctx, "podman", "stop", "agent-sandbox-gitea").Run()
 	_ = CommandContext(ctx, "podman", "stop", infraPostgresContainer).Run()
 	_ = CommandContext(ctx, "podman", "stop", infraSonarContainer).Run()
+	_ = CommandContext(ctx, "podman", "stop", infraOpenRouterContainer).Run()
 	return nil
 }
 
-// InspectInfraStack returns the runtime state of Valkey, Forgejo, PostgreSQL, and SonarQube containers
+// InspectInfraStack returns the runtime state of Valkey, Forgejo, PostgreSQL, SonarQube, and OpenRouter containers
 func InspectInfraStack(ctx context.Context) ([]ContainerInfo, error) {
-	containers := []string{infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, infraSonarContainer}
+	containers := []string{infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, infraSonarContainer, infraOpenRouterContainer}
 	var results []ContainerInfo
 	for _, c := range containers {
 		info, err := InspectAgentContainer(ctx, c)

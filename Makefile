@@ -152,6 +152,7 @@ build-cli: ## Build native Go CLI binaries (fleet, bp, bpd, mcps)
 		ln -sf forgejo-mcp $(BIN_DIR)/gitea-mcp; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/beads-mcp ./mcp/cmd/beads-mcp; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/sonar-mcp ./mcp/cmd/sonar-mcp; \
+		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/fleet-openrouter ./sandbox/cmd/fleet-openrouter; \
 		echo "Binaries built in $(BIN_DIR)/ (alias: $(BIN_DIR)/ft)"; \
 	else \
 		echo "Notice: go.work not yet initialized. Skipping build."; \

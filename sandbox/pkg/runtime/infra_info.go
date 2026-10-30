@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/boggycreek/sandbox/pkg/config"
@@ -67,13 +68,23 @@ type SonarQubeInfraInfo struct {
 	AdminPassword string `json:"admin_password"`
 }
 
+// OpenRouterInfraInfo holds connection and status details for the OpenRouter inference proxy.
+type OpenRouterInfraInfo struct {
+	Status           string `json:"status"`
+	Container        string `json:"container"`
+	InternalEndpoint string `json:"internal_endpoint"`
+	HostPort         string `json:"host_port"`
+	KeyConfigured    bool   `json:"key_configured"`
+}
+
 // InfraStackInfo holds the complete information for all shared infrastructure services.
 type InfraStackInfo struct {
-	Valkey     *ValkeyInfraInfo    `json:"valkey"`
-	Forgejo    *ForgejoInfraInfo   `json:"forgejo"`
-	Gitea      *ForgejoInfraInfo   `json:"gitea,omitempty"`
-	PostgreSQL *PostgresInfraInfo  `json:"postgresql"`
-	SonarQube  *SonarQubeInfraInfo `json:"sonarqube"`
+	Valkey     *ValkeyInfraInfo     `json:"valkey"`
+	Forgejo    *ForgejoInfraInfo    `json:"forgejo"`
+	Gitea      *ForgejoInfraInfo    `json:"gitea,omitempty"`
+	PostgreSQL *PostgresInfraInfo   `json:"postgresql"`
+	SonarQube  *SonarQubeInfraInfo  `json:"sonarqube"`
+	OpenRouter *OpenRouterInfraInfo `json:"openrouter,omitempty"`
 }
 
 type infoPair struct {
@@ -245,12 +256,41 @@ func GetInfraInfo(ctx context.Context, paths config.Paths, showSecrets bool) (*I
 		AdminPassword: sonarDisplayPass,
 	}
 
+	// 5. OpenRouter
+	openrouterKey := os.Getenv("OPENROUTER_API_KEY")
+	keyFile := filepath.Join(paths.DataHome, "secrets", "openrouter.key")
+	if openrouterKey == "" {
+		if data, err := os.ReadFile(keyFile); err == nil {
+			openrouterKey = strings.TrimSpace(string(data))
+		}
+	}
+	openrouterStatus := getState(infraOpenRouterContainer)
+	if openrouterStatus == "stopped" && openrouterKey == "" {
+		openrouterStatus = "not_configured"
+	}
+	openrouterPort := os.Getenv("OPENROUTER_PORT")
+	if openrouterPort == "" {
+		openrouterPort = "8080"
+	}
+	openrouterHost := os.Getenv("OPENROUTER_HOST")
+	if openrouterHost == "" {
+		openrouterHost = "127.0.0.1"
+	}
+	openrouterInfo := &OpenRouterInfraInfo{
+		Status:           openrouterStatus,
+		Container:        infraOpenRouterContainer,
+		InternalEndpoint: "fleet-openrouter:8080",
+		HostPort:         fmt.Sprintf("%s:%s", openrouterHost, openrouterPort),
+		KeyConfigured:    openrouterKey != "",
+	}
+
 	return &InfraStackInfo{
 		Valkey:     valkeyInfo,
 		Forgejo:    forgejoInfo,
 		Gitea:      forgejoInfo,
 		PostgreSQL: postgresInfo,
 		SonarQube:  sonarInfo,
+		OpenRouter: openrouterInfo,
 	}, nil
 }
 
@@ -326,6 +366,23 @@ func FormatInfraInfo(info *InfraStackInfo) string {
 				{"internal_url", info.SonarQube.InternalURL},
 				{"admin_user", info.SonarQube.AdminUser},
 				{"admin_password", info.SonarQube.AdminPassword},
+			},
+		})
+	}
+
+	if info.OpenRouter != nil {
+		configuredStr := "no"
+		if info.OpenRouter.KeyConfigured {
+			configuredStr = "yes"
+		}
+		sections = append(sections, infoSection{
+			header: "[openrouter]",
+			pairs: []infoPair{
+				{"status", info.OpenRouter.Status},
+				{"container", info.OpenRouter.Container},
+				{"internal_endpoint", info.OpenRouter.InternalEndpoint},
+				{"host_port", info.OpenRouter.HostPort},
+				{"key_configured", configuredStr},
 			},
 		})
 	}
