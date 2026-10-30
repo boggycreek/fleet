@@ -1,10 +1,11 @@
-<!-- Copyright (c) 2026 Boggy Creek Software LLC. Use of this source code is governed by an MIT-style license that can be found in the LICENSE file. -->
 ---
 name: fleet-openshell-evaluation
 description: >-
   Architectural evaluation of NVIDIA OpenShell runtime, sandboxing patterns, kernel-enforced isolation,
   credential proxying, and policy verification in comparison with Fleet's rootless Podman architecture.
 ---
+
+<!-- Copyright (c) 2026 Boggy Creek Software LLC. Use of this source code is governed by an MIT-style license that can be found in the LICENSE file. -->
 
 # NVIDIA OpenShell Evaluation & Fleet Integration Analysis
 
