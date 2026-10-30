@@ -54,9 +54,9 @@ func StartValkeyHarness(t *testing.T) *ValkeyHarness {
 	// Render ACL file
 	aclContent := fmt.Sprintf(`user default off
 user admin on >%s ~* &* +@all
-user operator on >%s ~operator:* ~human:name ~liaison:current ~poll-interval ~identity:* %%R~*:* &* +@all (+xadd ~*:inbox)
-user agent-1 on >%s ~agent-1:* ~identity:agent-1 ~poll-interval %%R~*:* &* +@all -@admin -@dangerous (+xadd ~*:inbox)
-user agent-2 on >%s ~agent-2:* ~identity:agent-2 ~poll-interval %%R~*:* &* +@all -@admin -@dangerous (+xadd ~*:inbox)
+user operator on >%s ~operator:* ~human:name ~liaison:current ~poll-interval ~identity:* ~ensemble:* %%R~*:* &* +@all (+xadd ~*:inbox)
+user agent-1 on >%s ~agent-1:* ~identity:agent-1 ~poll-interval ~ensemble:* %%R~*:* &* +@all -@admin -@dangerous (+xadd ~*:inbox)
+user agent-2 on >%s ~agent-2:* ~identity:agent-2 ~poll-interval ~ensemble:* %%R~*:* &* +@all -@admin -@dangerous (+xadd ~*:inbox)
 `, adminPass, humanPass, agent1Pass, agent2Pass)
 
 	aclPath := filepath.Join(tempDir, "valkey-users.acl")

@@ -26,6 +26,7 @@ type mockValkeyServer struct {
 	data     map[string]string
 	hashes   map[string]map[string]string
 	streams  map[string][]map[string]string
+	sets     map[string]map[string]struct{}
 	seqs     map[string]int64
 	closed   bool
 	authFail bool
@@ -43,6 +44,7 @@ func startMockValkeyServer(t *testing.T) (*mockValkeyServer, int) {
 		data:     make(map[string]string),
 		hashes:   make(map[string]map[string]string),
 		streams:  make(map[string][]map[string]string),
+		sets:     make(map[string]map[string]struct{}),
 		seqs:     make(map[string]int64),
 		t:        t,
 	}
@@ -204,6 +206,45 @@ func (s *mockValkeyServer) handleConn(conn net.Conn) {
 					{Type: resp.TypeArray, Array: keysArr},
 				},
 			})
+
+		case "SADD":
+			key := args[1].String()
+			if s.sets[key] == nil {
+				s.sets[key] = make(map[string]struct{})
+			}
+			var added int64
+			for i := 2; i < len(args); i++ {
+				m := args[i].String()
+				if _, exists := s.sets[key][m]; !exists {
+					s.sets[key][m] = struct{}{}
+					added++
+				}
+			}
+			_ = w.WriteValue(resp.Value{Type: resp.TypeInteger, Num: added})
+
+		case "SREM":
+			key := args[1].String()
+			var rem int64
+			if s.sets[key] != nil {
+				for i := 2; i < len(args); i++ {
+					m := args[i].String()
+					if _, exists := s.sets[key][m]; exists {
+						delete(s.sets[key], m)
+						rem++
+					}
+				}
+			}
+			_ = w.WriteValue(resp.Value{Type: resp.TypeInteger, Num: rem})
+
+		case "SMEMBERS":
+			key := args[1].String()
+			var arr []resp.Value
+			if s.sets[key] != nil {
+				for m := range s.sets[key] {
+					arr = append(arr, resp.Value{Type: resp.TypeBulkString, Str: m})
+				}
+			}
+			_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: arr})
 
 		case "XREAD":
 			// Minimal mock XREAD response
@@ -855,3 +896,108 @@ func TestVerifyMessageSecurity(t *testing.T) {
 		t.Errorf("expected stale timestamp to be accepted when skipFreshness is true")
 	}
 }
+
+func TestClientEnsembleOperations(t *testing.T) {
+	srv, port := startMockValkeyServer(t)
+	defer srv.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	priv, pub, err := GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair error: %v", err)
+	}
+	pemStr, _ := EncodePrivateKeyPEM(priv)
+	pubB64 := EncodePublicKeyBase64(pub)
+
+	cfg := ClientConfig{
+		Host:          "127.0.0.1",
+		Port:          port,
+		AgentID:       "agent-1",
+		SigningKeyPEM: pemStr,
+	}
+
+	client, err := Dial(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Dial error: %v", err)
+	}
+	defer client.Close()
+
+	_ = client.RegisterIdentity(ctx, IdentityRecord{Name: "agent-1", PubKey: pubB64})
+
+	// Validation errors
+	if err := client.JoinEnsemble(ctx, "Invalid_Name!"); err == nil {
+		t.Errorf("expected error joining with invalid name, got nil")
+	}
+	if err := client.LeaveEnsemble(ctx, "Invalid_Name!"); err == nil {
+		t.Errorf("expected error leaving with invalid name, got nil")
+	}
+	if _, err := client.PublishEnsemble(ctx, "Invalid_Name!", "msg"); err == nil {
+		t.Errorf("expected error publishing with invalid name, got nil")
+	}
+	if _, err := client.ReadEnsembleMessages(ctx, "Invalid_Name!", "0-0", 10); err == nil {
+		t.Errorf("expected error reading with invalid name, got nil")
+	}
+
+	// Join ensemble
+	if err := client.JoinEnsemble(ctx, "team-alpha"); err != nil {
+		t.Fatalf("JoinEnsemble failed: %v", err)
+	}
+	if err := client.JoinEnsemble(ctx, "team-beta"); err != nil {
+		t.Fatalf("JoinEnsemble failed: %v", err)
+	}
+
+	// List joined
+	joined, err := client.ListJoinedEnsembles(ctx)
+	if err != nil {
+		t.Fatalf("ListJoinedEnsembles failed: %v", err)
+	}
+	if len(joined) != 2 || joined[0] != "team-alpha" || joined[1] != "team-beta" {
+		t.Errorf("unexpected joined ensembles: %v", joined)
+	}
+
+	// Publish to ensemble without blob
+	msg, err := client.PublishEnsemble(ctx, "team-alpha", "hello team")
+	if err != nil {
+		t.Fatalf("PublishEnsemble failed: %v", err)
+	}
+	if msg.Destination != "ensemble:team-alpha" {
+		t.Errorf("got destination %q, want 'ensemble:team-alpha'", msg.Destination)
+	}
+
+	// Publish to ensemble with blob
+	blobKey, err := client.ParkBlob(ctx, []byte("ensemble blob data"))
+	if err != nil {
+		t.Fatalf("ParkBlob failed: %v", err)
+	}
+	msgBlob, err := client.PublishEnsemble(ctx, "team-alpha", "hello with blob", blobKey)
+	if err != nil {
+		t.Fatalf("PublishEnsemble with blob failed: %v", err)
+	}
+	if msgBlob.BlobPath != blobKey {
+		t.Errorf("got blob path %q, want %q", msgBlob.BlobPath, blobKey)
+	}
+
+	// Read messages
+	msgs, err := client.ReadEnsembleMessages(ctx, "team-alpha", "0-0", 50)
+	if err != nil {
+		t.Fatalf("ReadEnsembleMessages failed: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Errorf("expected read messages, got 0")
+	}
+
+	// Leave ensemble
+	if err := client.LeaveEnsemble(ctx, "team-beta"); err != nil {
+		t.Fatalf("LeaveEnsemble failed: %v", err)
+	}
+	joinedAfter, err := client.ListJoinedEnsembles(ctx)
+	if err != nil {
+		t.Fatalf("ListJoinedEnsembles after leave failed: %v", err)
+	}
+	if len(joinedAfter) != 1 || joinedAfter[0] != "team-alpha" {
+		t.Errorf("unexpected joined ensembles after leave: %v", joinedAfter)
+	}
+}
+

@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -228,31 +229,33 @@ func (c *Client) execInternal(ctx context.Context, cmd string, args ...string) (
 		}
 	}
 
-	if c.conn != nil {
+	c.mu.Lock()
+	activeConn := c.conn
+	c.mu.Unlock()
+
+	if activeConn != nil {
 		if deadline, ok := ctx.Deadline(); ok {
-			_ = c.conn.SetDeadline(deadline)
+			_ = activeConn.SetDeadline(deadline)
 		} else if minBlockDuration > 0 {
 			if c.cfg.ReadTimeout > minBlockDuration {
-				_ = c.conn.SetDeadline(time.Now().Add(c.cfg.ReadTimeout))
+				_ = activeConn.SetDeadline(time.Now().Add(c.cfg.ReadTimeout))
 			} else {
-				_ = c.conn.SetDeadline(time.Now().Add(minBlockDuration))
+				_ = activeConn.SetDeadline(time.Now().Add(minBlockDuration))
 			}
 		} else if c.cfg.ReadTimeout > 0 {
-			_ = c.conn.SetDeadline(time.Now().Add(c.cfg.ReadTimeout))
+			_ = activeConn.SetDeadline(time.Now().Add(c.cfg.ReadTimeout))
 		} else {
-			_ = c.conn.SetDeadline(time.Time{})
+			_ = activeConn.SetDeadline(time.Time{})
 		}
 		defer func() {
-			if c.conn != nil && !c.isClosed() {
-				_ = c.conn.SetDeadline(time.Time{})
+			if !c.isClosed() && !c.isBroken() {
+				_ = activeConn.SetDeadline(time.Time{})
 			}
 		}()
 
 		if ctx.Done() != nil {
 			stop := context.AfterFunc(ctx, func() {
-				if c.conn != nil {
-					_ = c.conn.SetDeadline(time.Unix(1, 0))
-				}
+				_ = activeConn.SetDeadline(time.Unix(1, 0))
 			})
 			defer stop()
 		}
@@ -377,6 +380,80 @@ func (c *Client) Post(ctx context.Context, recipient string, summary string, pay
 // Reply sends a threaded direct message citing a parent message ID
 func (c *Client) Reply(ctx context.Context, replyToMsgID string, recipient string, content string) (*Message, error) {
 	return c.publishMessage(ctx, InboxKey(recipient), recipient, content, "", replyToMsgID)
+}
+
+// JoinEnsemble registers the agent into the specified ensemble channel set (<agent>:ensembles)
+func (c *Client) JoinEnsemble(ctx context.Context, ensembleName string) error {
+	if err := ValidateEnsembleName(ensembleName); err != nil {
+		return err
+	}
+	name := strings.ToLower(strings.TrimSpace(ensembleName))
+	_, err := c.Exec(ctx, "SADD", AgentEnsemblesKey(c.cfg.AgentID), name)
+	return err
+}
+
+// LeaveEnsemble removes the agent from the specified ensemble channel set (<agent>:ensembles)
+func (c *Client) LeaveEnsemble(ctx context.Context, ensembleName string) error {
+	if err := ValidateEnsembleName(ensembleName); err != nil {
+		return err
+	}
+	name := strings.ToLower(strings.TrimSpace(ensembleName))
+	_, err := c.Exec(ctx, "SREM", AgentEnsemblesKey(c.cfg.AgentID), name)
+	return err
+}
+
+// ListJoinedEnsembles retrieves the list of ensembles this agent has joined
+func (c *Client) ListJoinedEnsembles(ctx context.Context) ([]string, error) {
+	val, err := c.Exec(ctx, "SMEMBERS", AgentEnsemblesKey(c.cfg.AgentID))
+	if err != nil {
+		return nil, err
+	}
+	items, err := val.AsArray()
+	if err != nil {
+		return nil, err
+	}
+	var res []string
+	for _, item := range items {
+		s, err := item.AsString()
+		if err == nil && s != "" {
+			res = append(res, s)
+		}
+	}
+	sort.Strings(res)
+	return res, nil
+}
+
+// PublishEnsemble broadcasts a message to a team-scoped ensemble stream (ensemble:<name>:out)
+func (c *Client) PublishEnsemble(ctx context.Context, ensembleName, content string, blobPath ...string) (*Message, error) {
+	if err := ValidateEnsembleName(ensembleName); err != nil {
+		return nil, err
+	}
+	name := strings.ToLower(strings.TrimSpace(ensembleName))
+	bp := ""
+	if len(blobPath) > 0 {
+		bp = blobPath[0]
+	}
+	return c.publishMessage(ctx, EnsembleOutKey(name), "ensemble:"+name, content, bp, "")
+}
+
+// ReadEnsembleMessages reads messages from an ensemble stream starting after lastID
+func (c *Client) ReadEnsembleMessages(ctx context.Context, ensembleName, lastID string, count int) ([]*Message, error) {
+	if err := ValidateEnsembleName(ensembleName); err != nil {
+		return nil, err
+	}
+	name := strings.ToLower(strings.TrimSpace(ensembleName))
+	stream := EnsembleOutKey(name)
+	if lastID == "" {
+		lastID = "0-0"
+	}
+	if count <= 0 {
+		count = 50
+	}
+	val, err := c.Exec(ctx, "XREAD", "COUNT", strconv.Itoa(count), "STREAMS", stream, lastID)
+	if err != nil {
+		return nil, err
+	}
+	return c.parseXReadResponse(ctx, val)
 }
 
 // GetCursor retrieves the last read stream ID for a given stream key

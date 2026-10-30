@@ -8,6 +8,7 @@ package libbp
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,36 @@ func BlobKey(id string, ts int64) string {
 	return fmt.Sprintf("%s:blob:%d", strings.ToLower(id), ts)
 }
 func IdentityKey(id string) string { return fmt.Sprintf("identity:%s", strings.ToLower(id)) }
+
+// EnsembleNameRegex enforces strict ensemble name format (e.g. ^[a-z][a-z0-9-]*$)
+var EnsembleNameRegex = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// ValidateEnsembleName validates that an ensemble name conforms to strict lowercase alphanumeric and hyphen format.
+func ValidateEnsembleName(name string) error {
+	trimmed := strings.ToLower(strings.TrimSpace(name))
+	if trimmed == "" {
+		return fmt.Errorf("ensemble name cannot be empty")
+	}
+	if len(trimmed) > 64 {
+		return fmt.Errorf("ensemble name %q exceeds maximum length of 64 characters", trimmed)
+	}
+	if !EnsembleNameRegex.MatchString(trimmed) {
+		return fmt.Errorf("invalid ensemble name %q: must match regex ^[a-z][a-z0-9-]*$", trimmed)
+	}
+	return nil
+}
+
+func EnsembleOutKey(name string) string {
+	return fmt.Sprintf("ensemble:%s:out", strings.ToLower(strings.TrimSpace(name)))
+}
+
+func AgentEnsemblesKey(agentID string) string {
+	return fmt.Sprintf("%s:ensembles", strings.ToLower(strings.TrimSpace(agentID)))
+}
+
+func EnsembleCursorKey(agentID, ensembleName string) string {
+	return fmt.Sprintf("%s:cursor:ensemble:%s", strings.ToLower(strings.TrimSpace(agentID)), strings.ToLower(strings.TrimSpace(ensembleName)))
+}
 
 // Message represents a backplane stream item
 type Message struct {
