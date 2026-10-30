@@ -94,6 +94,8 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Outbound container network traffic is restricted by default via an egress sidecar filter, permitting only approved LLM API endpoints and package repositories.
 - **[00015 — Rootless Netns Runtime Directory Auto-Healing](00015-RootlessNetnsRuntimeDirectoryAutoHealing.md)**  
   *Executive Summary:* Runtime preflight hooks, transparent failure interception, and test cleanup routines validate directory permissions and reconcile desynchronized rootless network namespace mounts.
+- **[00053 — Evaluate Podman Pod Co-location for Agent and Sidecars](00053-PodmanPodCoLocationForAgentAndSidecars.md)**
+  *Executive Summary:* Evaluates co-locating agent containers and companion sidecars inside rootless Podman pods sharing a single network namespace, comparing pod orchestration against standalone bridge-networked containers in terms of network egress isolation, lifecycle management, port mapping, and migration complexity.
 
 ### Developer Experience & IDE Ensembling (`THEME-DEVEXP`)
 - **[00016 — One-Shot IDE Remote Development and Host Ensembling](00016-OneShotIdeRemoteDevelopmentAndHostEnsembling.md)**  
