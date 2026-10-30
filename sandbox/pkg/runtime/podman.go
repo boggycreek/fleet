@@ -790,7 +790,7 @@ func StartInfraStack(ctx context.Context, paths config.Paths, adminPass, humanPa
 
 	aclContent := fmt.Sprintf(`user default off
 user admin on >%s ~* &* +@all
-user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* %%R~*:* &* +@all (+xadd ~*:inbox)
+user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~specialty:* %%R~*:* &* +@all (+xadd ~*:inbox)
 `, adminPass, humanName, humanPass, humanName)
 	_ = os.WriteFile(aclFile, []byte(aclContent), 0600)
 	_ = os.Chmod(aclFile, 0600)
@@ -1326,7 +1326,7 @@ func RecreateValkeyContainer(ctx context.Context, paths config.Paths, adminPass,
 
 	aclContent := fmt.Sprintf(`user default off
 user admin on >%s ~* &* +@all
-user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* %%R~*:* &* +@all (+xadd ~*:inbox)
+user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~specialty:* %%R~*:* &* +@all (+xadd ~*:inbox)
 `, adminPass, humanName, humanPass, humanName)
 	_ = os.WriteFile(aclFile, []byte(aclContent), 0600)
 	_ = os.Chmod(aclFile, 0600)

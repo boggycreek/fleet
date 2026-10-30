@@ -132,7 +132,7 @@ func (h *EphemeralInfraHarness) startContainers() {
 
 	aclContent := fmt.Sprintf(`user default off
 user admin on >%s ~* &* +@all
-user %s on >%s ~%s:* ~human:name ~liaison:current ~identity:* %%R~*:* &* +@all (+xadd ~*:inbox)
+user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~specialty:* %%R~*:* &* +@all (+xadd ~*:inbox)
 `, h.AdminPassword, h.HumanName, h.HumanPassword, h.HumanName)
 	if err := os.WriteFile(aclFile, []byte(aclContent), 0600); err != nil {
 		h.t.Fatalf("failed writing test valkey ACL file: %v", err)

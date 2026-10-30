@@ -7,12 +7,27 @@ package libbp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var specialtyNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// ValidateSpecialtyName checks that a specialty domain name is non-empty and valid.
+func ValidateSpecialtyName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return errors.New("specialty domain name cannot be empty")
+	}
+	if !specialtyNameRegex.MatchString(trimmed) {
+		return fmt.Errorf("invalid specialty domain name %q: must contain only alphanumeric characters, hyphens, and underscores", name)
+	}
+	return nil
+}
 
 // Well-known Valkey keys and TTLs
 const (
@@ -38,6 +53,9 @@ func BlobKey(id string, ts int64) string {
 	return fmt.Sprintf("%s:blob:%d", strings.ToLower(id), ts)
 }
 func IdentityKey(id string) string { return fmt.Sprintf("identity:%s", strings.ToLower(id)) }
+func SpecialtyKey(domain string) string {
+	return fmt.Sprintf("specialty:%s", strings.ToLower(strings.TrimSpace(domain)))
+}
 
 // EnsembleNameRegex enforces strict ensemble name format (e.g. ^[a-z][a-z0-9-]*$)
 var EnsembleNameRegex = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)

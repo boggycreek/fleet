@@ -47,7 +47,7 @@ func RegisterValkeyACL(ctx context.Context, cfg *config.AgentConfig, paths confi
 		fmt.Sprintf("~%s:*", cfg.Name),
 		fmt.Sprintf("~identity:%s", cfg.Name),
 		"~ensemble:*",
-		"%R~*:out", "%R~identity:*", "%R~human:*", "%R~*:blob:*",
+		"%R~*:out", "%R~identity:*", "%R~human:*", "%R~*:blob:*", "%R~specialty:*",
 		"&*", "+@all", "-@admin", "-@dangerous",
 		"(+xadd ~*:inbox)",
 	}

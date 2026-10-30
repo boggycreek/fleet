@@ -25,6 +25,7 @@ type mockValkeyServer struct {
 	mu       sync.Mutex
 	data     map[string]string
 	hashes   map[string]map[string]string
+	sets     map[string]map[string]bool
 	streams  map[string][]map[string]string
 	sets     map[string]map[string]struct{}
 	seqs     map[string]int64
@@ -43,6 +44,7 @@ func startMockValkeyServer(t *testing.T) (*mockValkeyServer, int) {
 		listener: listener,
 		data:     make(map[string]string),
 		hashes:   make(map[string]map[string]string),
+		sets:     make(map[string]map[string]bool),
 		streams:  make(map[string][]map[string]string),
 		sets:     make(map[string]map[string]struct{}),
 		seqs:     make(map[string]int64),
@@ -191,12 +193,64 @@ func (s *mockValkeyServer) handleConn(conn net.Conn) {
 			}
 			_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: arr})
 
+		case "SADD":
+			key := args[1].String()
+			if s.sets[key] == nil {
+				s.sets[key] = make(map[string]bool)
+			}
+			added := 0
+			for i := 2; i < len(args); i++ {
+				val := args[i].String()
+				if !s.sets[key][val] {
+					s.sets[key][val] = true
+					added++
+				}
+			}
+			_ = w.WriteValue(resp.Value{Type: resp.TypeInteger, Num: int64(added)})
+
+		case "SREM":
+			key := args[1].String()
+			removed := 0
+			if m, ok := s.sets[key]; ok {
+				for i := 2; i < len(args); i++ {
+					val := args[i].String()
+					if m[val] {
+						delete(m, val)
+						removed++
+					}
+				}
+			}
+			_ = w.WriteValue(resp.Value{Type: resp.TypeInteger, Num: int64(removed)})
+
+		case "SMEMBERS":
+			key := args[1].String()
+			m := s.sets[key]
+			var arr []resp.Value
+			for member := range m {
+				arr = append(arr, resp.Value{Type: resp.TypeBulkString, Str: member})
+			}
+			_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: arr})
+
 		case "SCAN":
-			// Return all known *:out stream keys
+			pattern := ""
+			for i := 1; i < len(args); i++ {
+				if strings.EqualFold(args[i].String(), "MATCH") && i+1 < len(args) {
+					pattern = args[i+1].String()
+					break
+				}
+			}
 			var keysArr []resp.Value
-			for k := range s.streams {
-				if strings.HasSuffix(k, ":out") {
-					keysArr = append(keysArr, resp.Value{Type: resp.TypeBulkString, Str: k})
+			if strings.HasPrefix(pattern, "specialty:") {
+				for k := range s.sets {
+					if strings.HasPrefix(k, "specialty:") {
+						keysArr = append(keysArr, resp.Value{Type: resp.TypeBulkString, Str: k})
+					}
+				}
+			} else {
+				for k := range s.streams {
+					if strings.HasSuffix(k, ":out") {
+						keysArr = append(keysArr, resp.Value{Type: resp.TypeBulkString, Str: k})
+					}
 				}
 			}
 			_ = w.WriteValue(resp.Value{
