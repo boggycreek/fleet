@@ -7,6 +7,7 @@ package libbp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -524,104 +525,293 @@ func TestClientDialErrors(t *testing.T) {
 }
 
 func TestLoadClientFromEnv(t *testing.T) {
-	os.Setenv("BP_HOST", "127.0.0.1")
-	os.Setenv("BP_PORT", "6380")
-	os.Setenv("BP_MODE", "agent")
-	os.Setenv("BP_AGENT", "agent-env-test")
-	os.Setenv("BP_PASSWORD", "secret123")
-	os.Setenv("BP_SIGNING_KEY_PEM", "")
+	t.Run("AgentMode", func(t *testing.T) {
+		t.Setenv("BP_HOST", "127.0.0.1")
+		t.Setenv("BP_PORT", "6380")
+		t.Setenv("BP_MODE", "agent")
+		t.Setenv("BP_AGENT", "agent-env-test")
+		t.Setenv("BP_PASSWORD", "secret123")
+		t.Setenv("BP_SIGNING_KEY_PEM", "")
 
-	cfg := LoadClientFromEnv()
-	if cfg.Host != "127.0.0.1" || cfg.Port != 6380 || cfg.AgentID != "agent-env-test" || cfg.Password != "secret123" {
-		t.Errorf("unexpected LoadClientFromEnv for agent: %+v", cfg)
+		cfg := LoadClientFromEnv()
+		if cfg.Host != "127.0.0.1" || cfg.Port != 6380 || cfg.AgentID != "agent-env-test" || cfg.Password != "secret123" {
+			t.Errorf("unexpected LoadClientFromEnv for agent: %+v", cfg)
+		}
+	})
+
+	t.Run("HumanMode", func(t *testing.T) {
+		t.Setenv("BP_MODE", "human")
+		t.Setenv("HUMAN_NAME", "admin-user")
+		t.Setenv("HUMAN_BACKPLANE_PASSWORD", "human-pass")
+		cfgHuman := LoadClientFromEnv()
+		if cfgHuman.AgentID != "admin-user" || cfgHuman.Password != "human-pass" {
+			t.Errorf("unexpected LoadClientFromEnv for human: %+v", cfgHuman)
+		}
+	})
+
+	t.Run("HumanFallbackWhenNameEmpty", func(t *testing.T) {
+		t.Setenv("BP_MODE", "human")
+		t.Setenv("HUMAN_NAME", "")
+		t.Setenv("HUMAN_BACKPLANE_PASSWORD", "human-pass")
+		cfgFallback := LoadClientFromEnv()
+		if cfgFallback.Username != "operator" {
+			t.Errorf("expected fallback to operator, got %s", cfgFallback.Username)
+		}
+	})
+
+	t.Run("SigningKeyPath", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		keyFile := filepath.Join(tmpDir, "key.pem")
+		priv, _, _ := GenerateKeypair()
+		pemStr, _ := EncodePrivateKeyPEM(priv)
+		_ = os.WriteFile(keyFile, []byte(pemStr), 0600)
+		t.Setenv("BP_SIGNING_KEY", keyFile)
+		cfgKeyPath := LoadClientFromEnv()
+		if cfgKeyPath.SigningKey == nil {
+			t.Errorf("expected signing key to load from BP_SIGNING_KEY file path")
+		}
+	})
+
+	t.Run("AgentFallbackFields", func(t *testing.T) {
+		t.Setenv("BP_MODE", "agent")
+		t.Setenv("BP_PORT", "not-a-number")
+		t.Setenv("BP_AGENT", "")
+		t.Setenv("AGENT_NAME", "agent-fallback-id")
+		t.Setenv("BP_PASSWORD", "")
+		t.Setenv("AGENT_PASSWORD", "agent-fallback-pw")
+		cfgFallbackAgent := LoadClientFromEnv()
+		if cfgFallbackAgent.AgentID != "agent-fallback-id" || cfgFallbackAgent.Password != "agent-fallback-pw" || cfgFallbackAgent.Port != 6379 {
+			t.Errorf("unexpected LoadClientFromEnv agent fallback: %+v", cfgFallbackAgent)
+		}
+	})
+
+	t.Run("FailClosedOnConflict", func(t *testing.T) {
+		t.Setenv("BP_MODE", "human")
+		t.Setenv("BP_AGENT", "conflicting-agent")
+		t.Setenv("HUMAN_NAME", "admin-user")
+		if _, err := LoadClientWithProfile("default"); err == nil {
+			t.Errorf("expected fail-closed error for conflicting BP_MODE=human and BP_AGENT")
+		}
+	})
+
+	t.Run("ProfileWithQuotes", func(t *testing.T) {
+		stateDir := t.TempDir()
+		t.Setenv("XDG_STATE_HOME", stateDir)
+		profilesDir := filepath.Join(stateDir, "bp", "profiles")
+		_ = os.MkdirAll(profilesDir, 0700)
+		testProfilePath := filepath.Join(profilesDir, "testprof.env")
+		profileEnv := "BP_AGENT=\"profile-agent\"\nBP_PASSWORD='prof-pass'\nBP_PORT=\"6399\"\n"
+		_ = os.WriteFile(testProfilePath, []byte(profileEnv), 0600)
+
+		// Even with ambient BP_MODE=human and HUMAN_NAME exported, named profile must NOT be hijacked
+		t.Setenv("BP_MODE", "human")
+		t.Setenv("HUMAN_NAME", "brian-operator")
+
+		cfgProf, err := LoadClientWithProfile("testprof")
+		if err != nil {
+			t.Fatalf("LoadClientWithProfile failed: %v", err)
+		}
+		if cfgProf.AgentID != "profile-agent" || cfgProf.Password != "prof-pass" || cfgProf.Port != 6399 || cfgProf.Mode != "agent" {
+			t.Errorf("unexpected profile config (hijacked by ambient env?): %+v", cfgProf)
+		}
+	})
+
+	t.Run("NonexistentSigningKeyInProfile", func(t *testing.T) {
+		stateDir := t.TempDir()
+		t.Setenv("XDG_STATE_HOME", stateDir)
+		profilesDir := filepath.Join(stateDir, "bp", "profiles")
+		_ = os.MkdirAll(profilesDir, 0700)
+		testKeyFailPath := filepath.Join(profilesDir, "keyfail.env")
+		keyFailEnv := "BP_AGENT=agent-fail\nBP_SIGNING_KEY=\"/nonexistent/key.pem\"\n"
+		_ = os.WriteFile(testKeyFailPath, []byte(keyFailEnv), 0600)
+		if _, err := LoadClientWithProfile("keyfail"); err == nil {
+			t.Errorf("expected error for nonexistent BP_SIGNING_KEY in profile")
+		}
+	})
+
+	t.Run("NonexistentProfile", func(t *testing.T) {
+		if _, err := LoadClientWithProfile("nonexistent-profile"); err == nil {
+			t.Errorf("expected error for missing non-default profile")
+		}
+	})
+}
+
+func TestLoadClientPathTraversal(t *testing.T) {
+	traversalProfiles := []string{
+		"../profile",
+		"../../etc/passwd",
+		"..",
+		"sub/dir",
+		"sub\\dir",
+		"profile/../../root",
 	}
 
-	os.Setenv("BP_MODE", "human")
-	os.Setenv("HUMAN_NAME", "admin-user")
-	os.Setenv("HUMAN_BACKPLANE_PASSWORD", "human-pass")
-	cfgHuman := LoadClientFromEnv()
-	if cfgHuman.AgentID != "admin-user" || cfgHuman.Password != "human-pass" {
-		t.Errorf("unexpected LoadClientFromEnv for human: %+v", cfgHuman)
+	for _, p := range traversalProfiles {
+		t.Run("profile_"+p, func(t *testing.T) {
+			_, err := LoadClientWithProfile(p)
+			if err == nil {
+				t.Errorf("expected path traversal error for profile %q, got nil", p)
+			}
+			t.Setenv("BP_PROFILE", p)
+			cfg := LoadClientFromEnv()
+			if cfg.AgentID != "" || cfg.Password != "" {
+				t.Errorf("expected empty config for malicious BP_PROFILE %q, got: %+v", p, cfg)
+			}
+		})
 	}
 
-	// Test fallback when HUMAN_NAME is empty
-	os.Unsetenv("HUMAN_NAME")
-	cfgFallback := LoadClientFromEnv()
-	if cfgFallback.Username != "operator" {
-		t.Errorf("expected fallback to operator, got %s", cfgFallback.Username)
+	traversalAgents := []string{
+		"../agent",
+		"../../evil",
+		"..",
+		"nested/agent",
 	}
 
-	// Test BP_SIGNING_KEY file path in LoadClientFromEnv
-	tmpDir := t.TempDir()
-	keyFile := fmt.Sprintf("%s/key.pem", tmpDir)
-	priv, _, _ := GenerateKeypair()
-	pemStr, _ := EncodePrivateKeyPEM(priv)
-	_ = os.WriteFile(keyFile, []byte(pemStr), 0600)
-	os.Setenv("BP_SIGNING_KEY", keyFile)
-	cfgKeyPath := LoadClientFromEnv()
-	if cfgKeyPath.SigningKey == nil {
-		t.Errorf("expected signing key to load from BP_SIGNING_KEY file path")
+	for _, a := range traversalAgents {
+		t.Run("agent_"+a, func(t *testing.T) {
+			t.Setenv("BP_AGENT", a)
+			cfg := LoadClientFromEnv()
+			if cfg.AgentID != "" {
+				t.Errorf("expected empty agent ID for traversal agent %q, got %q", a, cfg.AgentID)
+			}
+			_, err := LoadClientWithProfile("default")
+			if err == nil {
+				t.Errorf("expected error loading default profile with traversal agent %q", a)
+			}
+		})
 	}
 
-	// Test fallback to AGENT_NAME, AGENT_PASSWORD, and default port 6379
-	os.Setenv("BP_MODE", "agent")
-	os.Setenv("BP_PORT", "not-a-number")
-	os.Setenv("BP_AGENT", "")
-	os.Setenv("AGENT_NAME", "agent-fallback-id")
-	os.Setenv("BP_PASSWORD", "")
-	os.Setenv("AGENT_PASSWORD", "agent-fallback-pw")
-	os.Unsetenv("BP_SIGNING_KEY")
-	os.Unsetenv("BP_SIGNING_KEY_PEM")
-	cfgFallbackAgent := LoadClientFromEnv()
-	if cfgFallbackAgent.AgentID != "agent-fallback-id" || cfgFallbackAgent.Password != "agent-fallback-pw" || cfgFallbackAgent.Port != 6379 {
-		t.Errorf("unexpected LoadClientFromEnv agent fallback: %+v", cfgFallbackAgent)
-	}
+	t.Run("profile_file_with_traversal_agent", func(t *testing.T) {
+		stateDir := t.TempDir()
+		t.Setenv("XDG_STATE_HOME", stateDir)
+		profilesDir := filepath.Join(stateDir, "bp", "profiles")
+		_ = os.MkdirAll(profilesDir, 0700)
+		testPath := filepath.Join(profilesDir, "evilagent.env")
+		_ = os.WriteFile(testPath, []byte("BP_AGENT=\"../../evil\"\n"), 0600)
 
-	// Test Fail-Closed on conflicting BP_MODE=human and BP_AGENT
-	os.Setenv("BP_MODE", "human")
-	os.Setenv("BP_AGENT", "conflicting-agent")
-	os.Setenv("HUMAN_NAME", "admin-user")
-	if _, err := LoadClientWithProfile("default"); err == nil {
-		t.Errorf("expected fail-closed error for conflicting BP_MODE=human and BP_AGENT")
-	}
-	os.Unsetenv("BP_MODE")
-	os.Unsetenv("BP_AGENT")
+		_, err := LoadClientWithProfile("evilagent")
+		if err == nil {
+			t.Errorf("expected error loading profile containing traversal agent ID")
+		}
+	})
+}
 
-	// Test LoadClientWithProfile from file with quotes
-	os.Unsetenv("BP_PORT")
-	stateDir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", stateDir)
-	profilesDir := filepath.Join(stateDir, "bp", "profiles")
-	_ = os.MkdirAll(profilesDir, 0700)
-	testProfilePath := filepath.Join(profilesDir, "testprof.env")
-	profileEnv := "BP_AGENT=\"profile-agent\"\nBP_PASSWORD='prof-pass'\nBP_PORT=\"6399\"\n"
-	_ = os.WriteFile(testProfilePath, []byte(profileEnv), 0600)
+func TestClientSocketDeadlineAndContextCancel(t *testing.T) {
+	srv, port := startMockValkeyServer(t)
+	defer srv.close()
 
-	// Even with ambient BP_MODE=human and HUMAN_NAME exported, named profile must NOT be hijacked
-	t.Setenv("BP_MODE", "human")
-	t.Setenv("HUMAN_NAME", "brian-operator")
-
-	cfgProf, err := LoadClientWithProfile("testprof")
+	ctx := context.Background()
+	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-race"})
 	if err != nil {
-		t.Fatalf("LoadClientWithProfile failed: %v", err)
+		t.Fatalf("Dial failed: %v", err)
 	}
-	if cfgProf.AgentID != "profile-agent" || cfgProf.Password != "prof-pass" || cfgProf.Port != 6399 || cfgProf.Mode != "agent" {
-		t.Errorf("unexpected profile config (hijacked by ambient env?): %+v", cfgProf)
-	}
-	os.Unsetenv("BP_MODE")
-	os.Unsetenv("HUMAN_NAME")
+	defer client.Close()
 
-	// Quoted BP_SIGNING_KEY that does not exist should return error
-	testKeyFailPath := filepath.Join(profilesDir, "keyfail.env")
-	keyFailEnv := "BP_AGENT=agent-fail\nBP_SIGNING_KEY=\"/nonexistent/key.pem\"\n"
-	_ = os.WriteFile(testKeyFailPath, []byte(keyFailEnv), 0600)
-	if _, err := LoadClientWithProfile("keyfail"); err == nil {
-		t.Errorf("expected error for nonexistent BP_SIGNING_KEY in profile")
+	// Canceled context in execInternal marks broken
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+	_, err = client.execInternal(cancelCtx, "PING")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
 	}
 
-	// Missing profile error
-	if _, err := LoadClientWithProfile("nonexistent-profile"); err == nil {
-		t.Errorf("expected error for missing non-default profile")
+	// Verify client connection was marked broken
+	if !client.isBroken() {
+		t.Errorf("expected client to be marked broken after canceled context")
+	}
+
+	// Broken connection reconnects cleanly on next Exec
+	val, err := client.Exec(ctx, "PING")
+	if err != nil {
+		t.Fatalf("expected successful reconnect after broken connection, got: %v", err)
+	}
+	if val.Str != "PONG" {
+		t.Errorf("expected PONG after reconnect, got: %v", val.Str)
+	}
+
+	// Hang server test: listener that accepts but never replies
+	hangListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen failed: %v", err)
+	}
+	defer hangListener.Close()
+	hangPort := hangListener.Addr().(*net.TCPAddr).Port
+
+	hangClient, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: hangPort, AgentID: "agent-hang", ConnectTimeout: 500 * time.Millisecond})
+	if err == nil {
+		defer hangClient.Close()
+		blockCtx, blockCancel := context.WithCancel(context.Background())
+		go func() {
+			conn, lErr := hangListener.Accept()
+			if lErr == nil {
+				defer conn.Close()
+				blockCancel()
+			}
+		}()
+		_, err = hangClient.Exec(blockCtx, "PING")
+		if err == nil {
+			t.Errorf("expected error from hanging connection, got nil")
+		}
+		if !hangClient.isBroken() {
+			t.Errorf("expected hangClient to be marked broken after context cancellation")
+		}
+	}
+}
+
+func TestParseXReadResponseCursorError(t *testing.T) {
+	srv, port := startMockValkeyServer(t)
+	defer srv.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-1"})
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	xreadVal := resp.Value{
+		Type: resp.TypeArray,
+		Array: []resp.Value{
+			{
+				Type: resp.TypeArray,
+				Array: []resp.Value{
+					{Type: resp.TypeBulkString, Str: "agent-1:inbox"},
+					{
+						Type: resp.TypeArray,
+						Array: []resp.Value{
+							{
+								Type: resp.TypeArray,
+								Array: []resp.Value{
+									{Type: resp.TypeBulkString, Str: "100-0"},
+									{
+										Type: resp.TypeArray,
+										Array: []resp.Value{
+											{Type: resp.TypeBulkString, Str: "sender"},
+											{Type: resp.TypeBulkString, Str: "agent-2"},
+											{Type: resp.TypeBulkString, Str: "content"},
+											{Type: resp.TypeBulkString, Str: "hi"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Close the client so SetCursor fails when parseXReadResponse runs
+	_ = client.Close()
+
+	_, err = client.parseXReadResponse(ctx, xreadVal)
+	if err == nil {
+		t.Fatalf("expected error from parseXReadResponse when SetCursor fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to update cursor") {
+		t.Errorf("expected 'failed to update cursor' in error, got: %v", err)
 	}
 }
 
@@ -840,6 +1030,12 @@ func TestVerifyMessageSecurity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	secClient, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-sec"})
+	if err != nil {
+		t.Fatalf("Dial secClient failed: %v", err)
+	}
+	defer secClient.Close()
+
 	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-1"})
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
@@ -848,7 +1044,9 @@ func TestVerifyMessageSecurity(t *testing.T) {
 
 	priv, pub, _ := GenerateKeypair()
 	pubB64 := EncodePublicKeyBase64(pub)
-	_ = client.RegisterIdentity(ctx, IdentityRecord{Name: "agent-sec", PubKey: pubB64})
+	if err := secClient.RegisterIdentity(ctx, IdentityRecord{Name: "agent-sec", PubKey: pubB64}); err != nil {
+		t.Fatalf("RegisterIdentity failed: %v", err)
+	}
 
 	baseMsg := func() *Message {
 		return &Message{
