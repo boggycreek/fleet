@@ -25,11 +25,10 @@ description: >-
   - Ed25519 signing key integrity and synchronization.
   - Dedicated host IDE keypair (`~/.ssh/fleet`) and OpenSSH `Include` directive.
   - Podman network (`fleet-infra`) and persistent home volume (`fleet-<name>-home`).
-  - Agent container image presence (Tier 1-3 resolution from ADR 00029).
+  - Agent container image presence (Tier 1-3 resolution from ADR 00043).
   - Valkey backplane ACL provisioning.
   - Forgejo user account, SSH public key, and `fleet` org membership.
   - Container status and dynamic SSH port discovery.
 
 Further reading:
-- [ADR 00026 — Agent Diagnostic Doctor and Automated Self-Healing](../adr/00026-AgentDiagnosticDoctorAndAutoHealing.md)
-- [ADR 00027 — Shared Infrastructure Diagnostic Doctor and Automated Self-Healing](../adr/00027-InfrastructureDiagnosticDoctorAndAutoHealing.md)
+- [ADR 00023 — Comprehensive Diagnostic Doctor and Self-Healing](../adr/00023-ComprehensiveDoctorAndSelfHealing.md)

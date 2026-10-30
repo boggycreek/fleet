@@ -30,5 +30,4 @@ description: >-
 - `make test-install`: Runs isolated installation and bootstrap smoke testing inside an ephemeral rootless container (`test/container-install/test-install.sh`) without mutating host environment.
 
 Further reading:
-- [ADR 00018 — Quality Engineering & SCA](../adr/00018-QualityEngineeringTestingAndSCA.md)
-- [ADR 00028 — Ephemeral Integration Test Lifecycles](../adr/00028-EphemeralIntegrationTestLifecycleAndIsolation.md)
+- [ADR 00025 — Quality Gates and Coverage Enforcement](../adr/00025-QualityGatesAndCoverageEnforcement.md)
