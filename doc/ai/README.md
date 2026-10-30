@@ -9,21 +9,8 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[Testing Guidelines & Coverage Gates](testing-guidelines.md)** (`fleet-testing-guidelines`): Strict >=90% test coverage enforcement, rootless Podman cleanup patterns, containerized smoke testing.
 - **[Diagnostic Doctor & Auto-Healing](doctor-diagnostics.md)** (`fleet-doctor-diagnostics`): `fleet agent doctor` and `fleet infra doctor` architecture, check categories, healing behavior.
 - **[Code Review Protocol](code-review.md)** (`fleet-code-review`): Protocol, inspection checklist, and reporting format for architectural, logical, and security PR reviews.
-- **[Shell & CI Security Audit Findings](shell-and-ci-audit-findings.md)** (`fleet-shell-and-ci-audit-findings`): Targeted security, error handling, and portability audit findings for Fleet's shell scripts, installer, setup, and GitHub Actions CI toolchains.
-- **[NVIDIA OpenShell Evaluation](nvidia-openshell-evaluation.md)** (`fleet-openshell-evaluation`): Architectural evaluation of NVIDIA OpenShell runtime, Landlock/seccomp sandboxing, egress proxying, and Podman comparison.
-- **[Distributed Inference Evaluation: exo](distributed-inference-exo.md)** (`fleet-exo-evaluation`): Technical evaluation of exo for local-network LLM inference behind Fleet's local model gateway.
-- **[Thinking Machines Inkling Evaluation](thinking-machines-inkling-evaluation.md)** (`fleet-inkling-evaluation`): Architectural evaluation of Thinking Machines Inkling (975B/41B MoE) with controllable reasoning budget and Colibri NVMe streaming.
-- **[Liquid Foundation Models Evaluation](liquid-ai-lfm-evaluation.md)** (`fleet-lfm-evaluation`): Architecture, serving engine compatibility, agentic tool calling, and local gateway recommendations for Liquid AI LFMs.
-- **[Colibri MoE Inference Evaluation](colibri-moe-inference.md)** (`fleet-colibri-evaluation`): Architectural evaluation of Colibri for NVMe-streamed frontier MoE inference on Fleet developer workstations.
-- **[Adversarial Review & Critic Protocol](adversarial-review.md)** (`fleet-adversarial-review`): Dual-agent adversarial review, hypothesis generation, and critic verification to eliminate hallucinations.
-- **[Language-Specific Best Practices](language-best-practices.md)** (`fleet-language-best-practices`): Language-specific engineering best practices and conventions for Go, Python, TypeScript/Node.js, Shell/Bash, and Rust.
-- **[OpenClaw Concurrency Evaluation](openclaw-concurrency-patterns.md)** (`fleet-openclaw-evaluation`): Comparative architectural analysis of OpenClaw cognitive/concurrency patterns against Fleet's native Go agent runtime (ADR 00041).
-- **[Memory Subsystem Specification & Architecture](memory-subsystem-spec.md)** (`fleet-memory-subsystem-spec`): Standardizing agent cognitive memory across Fleet and Lokol platforms, 5 cognitive pillars, 3-tier progressive disclosure, MCP contracts, and sync strategy.
-- **[Valkey Pub/Sub Evaluation](valkey-pubsub-evaluation.md)** (`fleet-valkey-pubsub-evaluation`): Trade-off evaluation, hybrid push-wakeup architecture, Sharded Pub/Sub, ACL security, and roadmap for backplane push notifications.
-- **[Server-Side Valkey Stream Guard Evaluation](valkey-stream-guard-evaluation.md)** (`fleet-valkey-stream-guard-evaluation`): Comparative evaluation of server-side Go proxy sidecar vs. native C module for RESP wire-level inspection and DoS protection (ADR 00054).
-- **[Podman Pod Co-location Evaluation](podman-pod-colocation.md)** (`fleet-podman-pod-colocation`): Architectural evaluation and operational guide for Podman pod co-location of agent containers and companion sidecars (ADR 00053).
-- **[128k KV Cache Scaling Guide](kv-cache-128k-scaling.md)** (`fleet-kv-cache-128k-scaling`): VRAM allocation models, llama-server flags, multi-agent topology selection, and prefix caching dynamics.
 - **[Multi-Machine Local Network Federation & Gateway DNS](multi-machine-network-federation.md)** (`fleet-multi-machine-network-federation`): Architecture evaluation and operational guide for multi-machine local network Fleet pod deployment, federated backplane relaying, and gateway DNS resolution.
+- **[VS Code Extension Design](vscode-extension-design.md)** (`fleet-vscode-extension-design`): Architecture and UX design guide for Fleet VS Code extension with Remote-SSH one-click attach.
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.
