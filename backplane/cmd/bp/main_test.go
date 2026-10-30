@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,6 +77,60 @@ func TestBPFullCoverage(t *testing.T) {
 		t.Errorf("whoami failed: %s", out)
 	}
 
+	// whoami with operator and signing key
+	tmpKeyDir := t.TempDir()
+	keyPath := filepath.Join(tmpKeyDir, "op-key.pem")
+	priv, _, _ := libbp.GenerateKeypair()
+	pem, _ := libbp.EncodePrivateKeyPEM(priv)
+	_ = os.WriteFile(keyPath, []byte(pem), 0600)
+	t.Setenv("BP_AGENT", "")
+	t.Setenv("HUMAN_NAME", "operator")
+	t.Setenv("BP_MODE", "human")
+	t.Setenv("HUMAN_BACKPLANE_PASSWORD", valkey.HumanPass)
+	t.Setenv("BP_SIGNING_KEY", keyPath)
+	code, out, _ = runCLI([]string{"whoami"})
+	if code != 0 || !strings.Contains(out, "Mode:       human") || strings.Contains(out, "Public Key: none") {
+		t.Errorf("whoami with operator and key failed: %s", out)
+	}
+
+	// whoami with empty BP_MODE and agent ID (hits fallback mode = agent)
+	t.Setenv("BP_AGENT", "agent-fallback")
+	t.Setenv("BP_MODE", "")
+	t.Setenv("BP_SIGNING_KEY", "")
+	code, out, _ = runCLI([]string{"whoami"})
+	if code != 0 || !strings.Contains(out, "Mode:       agent") {
+		t.Errorf("whoami fallback mode agent failed: %s", out)
+	}
+
+	t.Setenv("BP_AGENT", "agent-1")
+	t.Setenv("BP_MODE", "agent")
+	t.Setenv("BP_PASSWORD", valkey.Agent1Pass)
+
+	// say usage errors
+	var errOut string
+	code, _, errOut = runCLI([]string{"say"})
+	if code != 1 || !strings.Contains(errOut, "say requires a message or --file") {
+		t.Errorf("say missing args failed: %s", errOut)
+	}
+	code, _, errOut = runCLI([]string{"say", "--file"})
+	if code != 1 || !strings.Contains(errOut, "flag needs an argument: --file") {
+		t.Errorf("say --file missing arg failed: %s", errOut)
+	}
+	code, _, errOut = runCLI([]string{"say", "-unknown"})
+	if code != 1 || !strings.Contains(errOut, "flag provided but not defined") {
+		t.Errorf("say unknown flag failed: %s", errOut)
+	}
+
+	// tell --file flag missing arg and file read error
+	code, _, errOut = runCLI([]string{"tell", "--file"})
+	if code != 1 || !strings.Contains(errOut, "flag needs an argument: --file") {
+		t.Errorf("tell --file missing arg failed: %s", errOut)
+	}
+	code, _, errOut = runCLI([]string{"tell", "agent-2", "hello", "--file", filepath.Join(tmpKeyDir, "missing")})
+	if code != 1 || !strings.Contains(errOut, "failed reading file") {
+		t.Errorf("tell file read error failed: %s", errOut)
+	}
+
 	// profile list
 	code, out, _ = runCLI([]string{"profile", "list"})
 	if code != 0 || !strings.Contains(out, "Available profiles:") {
@@ -89,7 +144,7 @@ func TestBPFullCoverage(t *testing.T) {
 	}
 
 	// profile invalid sub
-	code, _, errOut := runCLI([]string{"profile", "invalid"})
+	code, _, errOut = runCLI([]string{"profile", "invalid"})
 	if code != 1 || !strings.Contains(errOut, "unknown profile subcommand") {
 		t.Errorf("profile invalid sub failed")
 	}
@@ -98,6 +153,36 @@ func TestBPFullCoverage(t *testing.T) {
 	code, _, errOut = runCLI([]string{"--profile"})
 	if code != 1 || !strings.Contains(errOut, "--profile flag requires an argument") {
 		t.Errorf("--profile missing arg failed")
+	}
+
+	// profile list with default profile file
+	profileDir := filepath.Join(tmpKeyDir, "bp", "profiles")
+	_ = os.MkdirAll(profileDir, 0755)
+	_ = os.WriteFile(filepath.Join(profileDir, "default.env"), []byte("BP_HOST=127.0.0.1\n"), 0600)
+	t.Setenv("XDG_STATE_HOME", tmpKeyDir)
+	code, out, _ = runCLI([]string{"profile", "list"})
+	if code != 0 || !strings.Contains(out, "default") {
+		t.Errorf("profile list with default failed: %s", out)
+	}
+
+	// status usage errors
+	code, _, errOut = runCLI([]string{"status"})
+	if code != 1 || !strings.Contains(errOut, "Usage: bp status set") {
+		t.Errorf("status missing args failed")
+	}
+	code, _, errOut = runCLI([]string{"status", "unknown"})
+	if code != 1 || !strings.Contains(errOut, "Usage: bp status set") {
+		t.Errorf("status unknown sub failed")
+	}
+
+	// tell usage errors
+	code, _, errOut = runCLI([]string{"tell"})
+	if code != 1 || !strings.Contains(errOut, "tell requires <agent> <message>") {
+		t.Errorf("tell missing args failed")
+	}
+	code, _, errOut = runCLI([]string{"tell", "agent-2"})
+	if code != 1 || !strings.Contains(errOut, "tell requires <agent> <message>") {
+		t.Errorf("tell missing message failed")
 	}
 
 	// --profile flag with whoami
@@ -965,6 +1050,20 @@ func TestBPStateAndQueueSubcommands(t *testing.T) {
 	if code != 0 || strings.TrimSpace(out) != "" {
 		t.Errorf("expected empty queue list after clear: %q", out)
 	}
+
+	// Test default paths when AGENT_STATE_FILE and AGENT_QUEUE_FILE are unset
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("AGENT_STATE_FILE", "")
+	t.Setenv("AGENT_QUEUE_FILE", "")
+	code, _, _ = runCLI([]string{"state", "queue", "list"})
+	if code != 0 {
+		t.Errorf("expected 0 for empty queue in home")
+	}
+	code, _, _ = runCLI([]string{"state", "show"})
+	if code != 1 {
+		t.Errorf("expected 1 for show with default missing state file")
+	}
 }
 
 func TestBPStateQueueConcurrent(t *testing.T) {
@@ -1043,3 +1142,203 @@ func TestRecvBlockSizesTimeoutFromStart(t *testing.T) {
 		t.Fatalf("expected non-zero exit code when parent context is canceled")
 	}
 }
+
+func TestBPEnsembleSubcommands(t *testing.T) {
+	valkey := harness.StartValkeyHarness(t)
+	defer valkey.Teardown()
+
+	tmpDir := t.TempDir()
+	profilePath := filepath.Join(tmpDir, "bp", "profiles", "agent-1.env")
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0755); err != nil {
+		t.Fatalf("failed creating profile dir: %v", err)
+	}
+	t.Setenv("XDG_STATE_HOME", tmpDir)
+	content := fmt.Sprintf("BP_HOST=127.0.0.1\nBP_PORT=%d\nBP_AGENT=agent-1\nBP_PASSWORD=%s\n", valkey.Port, valkey.Agent1Pass)
+	if err := os.WriteFile(profilePath, []byte(content), 0600); err != nil {
+		t.Fatalf("failed writing profile: %v", err)
+	}
+
+	t.Setenv("BP_HOST", "127.0.0.1")
+	t.Setenv("BP_PORT", fmt.Sprintf("%d", valkey.Port))
+	t.Setenv("BP_MODE", "agent")
+	t.Setenv("BP_AGENT", "agent-1")
+	t.Setenv("BP_PASSWORD", valkey.Agent1Pass)
+
+	// 1. Validation & Usage Errors
+	tests := []struct {
+		args        []string
+		wantCode    int
+		wantContain string
+	}{
+		{[]string{"ensemble"}, 1, "Usage: bp ensemble"},
+		{[]string{"ensemble", "unknown-subcommand"}, 1, "unknown ensemble command"},
+		{[]string{"ensemble", "create"}, 1, "Usage: bp ensemble create"},
+		{[]string{"ensemble", "create", "Invalid_Name!"}, 1, "must match regex"},
+		{[]string{"ensemble", "join"}, 1, "Usage: bp ensemble join"},
+		{[]string{"ensemble", "join", "Invalid_Name!"}, 1, "must match regex"},
+		{[]string{"ensemble", "leave"}, 1, "Usage: bp ensemble leave"},
+		{[]string{"ensemble", "leave", "Invalid_Name!"}, 1, "must match regex"},
+		{[]string{"ensemble", "say"}, 1, "Usage: bp ensemble say"},
+		{[]string{"ensemble", "say", "team"}, 1, "Usage: bp ensemble say"},
+		{[]string{"ensemble", "say", "Invalid_Name!", "hello"}, 1, "must match regex"},
+		{[]string{"ensemble", "recv"}, 1, "Usage: bp ensemble recv"},
+		{[]string{"ensemble", "recv", "Invalid_Name!"}, 1, "must match regex"},
+	}
+
+	for _, tt := range tests {
+		code, out, errOut := runCLI(tt.args)
+		combined := out + errOut
+		if code != tt.wantCode || !strings.Contains(combined, tt.wantContain) {
+			t.Errorf("args %v: got code=%d, output=%q; want code=%d containing %q", tt.args, code, combined, tt.wantCode, tt.wantContain)
+		}
+	}
+
+	// 2. Initial list (empty)
+	code, out, errOut := runCLI([]string{"ensemble", "list"})
+	if code != 0 || !strings.Contains(out, "No joined ensembles.") {
+		t.Fatalf("ensemble list empty failed: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// 3. Create ensemble
+	code, out, errOut = runCLI([]string{"ensemble", "create", "backend-team"})
+	if code != 0 || !strings.Contains(out, "Created and joined ensemble backend-team") {
+		t.Fatalf("ensemble create failed: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// 4. List now contains backend-team
+	code, out, _ = runCLI([]string{"ensemble", "list"})
+	if code != 0 || !strings.Contains(out, "- backend-team") {
+		t.Fatalf("expected backend-team in list: %s", out)
+	}
+
+	// 5. Join another ensemble
+	code, out, errOut = runCLI([]string{"ensemble", "join", "data-team"})
+	if code != 0 || !strings.Contains(out, "Joined ensemble data-team") {
+		t.Fatalf("ensemble join failed: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// 6. List contains both
+	code, out, _ = runCLI([]string{"ensemble", "list"})
+	if code != 0 || !strings.Contains(out, "- backend-team") || !strings.Contains(out, "- data-team") {
+		t.Fatalf("expected backend-team and data-team in list: %s", out)
+	}
+
+	// 7. Say to ensemble
+	code, out, errOut = runCLI([]string{"ensemble", "say", "backend-team", "starting", "migration", "now"})
+	if code != 0 || !strings.Contains(out, "Sent to ensemble backend-team") {
+		t.Fatalf("ensemble say failed: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// 8. Say to ensemble with --file
+	payloadFile := filepath.Join(tmpDir, "schema.sql")
+	if err := os.WriteFile(payloadFile, []byte("CREATE TABLE users;"), 0600); err != nil {
+		t.Fatalf("failed writing payload file: %v", err)
+	}
+	code, out, errOut = runCLI([]string{"ensemble", "say", "backend-team", "schema attached", "--file", payloadFile})
+	if code != 0 || !strings.Contains(out, "Sent to ensemble backend-team") {
+		t.Fatalf("ensemble say with file failed: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// 9. Say to ensemble with non-existent file
+	code, _, errOut = runCLI([]string{"ensemble", "say", "backend-team", "bad file", "--file", filepath.Join(tmpDir, "does-not-exist")})
+	if code != 1 || !strings.Contains(errOut, "error reading file") {
+		t.Fatalf("expected file error, got code=%d err=%s", code, errOut)
+	}
+
+	// 10. Recv from ensemble
+	code, out, errOut = runCLI([]string{"ensemble", "recv", "backend-team"})
+	if code != 0 || !strings.Contains(out, "starting migration now") {
+		t.Fatalf("ensemble recv failed: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// Recv with --last
+	code, out, errOut = runCLI([]string{"ensemble", "recv", "backend-team", "--last", "0-0"})
+	if code != 0 || !strings.Contains(out, "schema attached") {
+		t.Fatalf("ensemble recv with last failed: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// 11. Leave ensemble
+	code, out, errOut = runCLI([]string{"ensemble", "leave", "data-team"})
+	if code != 0 || !strings.Contains(out, "Left ensemble data-team") {
+		t.Fatalf("ensemble leave failed: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// 12. Verify list only has backend-team
+	code, out, _ = runCLI([]string{"ensemble", "list"})
+	if code != 0 || strings.Contains(out, "data-team") || !strings.Contains(out, "backend-team") {
+		t.Fatalf("expected only backend-team in list after leave: %s", out)
+	}
+
+	// 13. Connection failure handling
+	t.Setenv("BP_PORT", "65530")
+	code, _, errOut = runCLI([]string{"ensemble", "list"})
+	if code != 1 {
+		t.Fatalf("expected failure with bad port, got %d", code)
+	}
+
+	// 14. Server errors on command execution
+	rejPort, closeRej := startRejectingServer(t)
+	defer closeRej()
+
+	t.Setenv("BP_PORT", fmt.Sprintf("%d", rejPort))
+	t.Setenv("BP_PASSWORD", "")
+
+	code, _, errOut = runCLI([]string{"ensemble", "create", "fail-team"})
+	if code != 1 || !strings.Contains(errOut, "failed creating ensemble") {
+		t.Errorf("expected failed creating ensemble, got code=%d out=%s", code, errOut)
+	}
+
+	code, _, errOut = runCLI([]string{"ensemble", "join", "fail-team"})
+	if code != 1 || !strings.Contains(errOut, "failed joining ensemble") {
+		t.Errorf("expected failed joining ensemble, got code=%d out=%s", code, errOut)
+	}
+
+	code, _, errOut = runCLI([]string{"ensemble", "leave", "fail-team"})
+	if code != 1 || !strings.Contains(errOut, "failed leaving ensemble") {
+		t.Errorf("expected failed leaving ensemble, got code=%d out=%s", code, errOut)
+	}
+
+	code, _, errOut = runCLI([]string{"ensemble", "list"})
+	if code != 1 || !strings.Contains(errOut, "failed listing ensembles") {
+		t.Errorf("expected failed listing ensembles, got code=%d out=%s", code, errOut)
+	}
+
+	code, _, errOut = runCLI([]string{"ensemble", "say", "fail-team", "msg"})
+	if code != 1 || !strings.Contains(errOut, "failed sending to ensemble") {
+		t.Errorf("expected failed sending to ensemble, got code=%d out=%s", code, errOut)
+	}
+
+	code, _, errOut = runCLI([]string{"ensemble", "recv", "fail-team"})
+	if code != 1 || !strings.Contains(errOut, "failed reading ensemble") {
+		t.Errorf("expected failed reading ensemble, got code=%d out=%s", code, errOut)
+	}
+}
+
+func startRejectingServer(t *testing.T) (int, func()) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen error: %v", err)
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 1024)
+				for {
+					n, err := c.Read(buf)
+					if err != nil || n == 0 {
+						return
+					}
+					_, _ = c.Write([]byte("-ERR mock error\r\n"))
+				}
+			}(conn)
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port, func() { _ = ln.Close() }
+}
+
+

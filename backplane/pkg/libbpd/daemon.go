@@ -32,6 +32,14 @@ type BackplaneClient interface {
 	Close() error
 }
 
+// EnsembleClient represents backplane operations for ensemble channel discovery and message polling.
+type EnsembleClient interface {
+	ListJoinedEnsembles(ctx context.Context) ([]string, error)
+	ReadEnsembleMessages(ctx context.Context, ensembleName, lastID string, count int) ([]*libbp.Message, error)
+	GetCursor(ctx context.Context, streamKey string) (string, error)
+	SetCursor(ctx context.Context, streamKey string, lastID string) error
+}
+
 // RunnerFunc represents a command execution function for running headless agent turns.
 type RunnerFunc func(ctx context.Context, cmdName string, cmdArgs []string, stdin io.Reader, stdout, stderr io.Writer) error
 
@@ -306,7 +314,29 @@ func (d *Daemon) Tick(ctx context.Context, blockSeconds ...int) error {
 	messages, err := d.client.Recv(ctx, blockSec)
 	if err != nil {
 		fmt.Fprintf(d.stderr, "[bpd] Error draining messages from backplane: %v\n", err)
-	} else if len(messages) > 0 {
+	}
+
+	// 2b. Drain messages from joined ensembles
+	if ensembleClient, ok := d.client.(EnsembleClient); ok {
+		ensembles, ensErr := ensembleClient.ListJoinedEnsembles(ctx)
+		if ensErr == nil {
+			for _, ens := range ensembles {
+				streamKey := libbp.EnsembleOutKey(ens)
+				cursor, _ := ensembleClient.GetCursor(ctx, streamKey)
+				if cursor == "" {
+					cursor = "0-0"
+				}
+				ensMsgs, readErr := ensembleClient.ReadEnsembleMessages(ctx, ens, cursor, 50)
+				if readErr == nil && len(ensMsgs) > 0 {
+					messages = append(messages, ensMsgs...)
+					lastMsg := ensMsgs[len(ensMsgs)-1]
+					_ = ensembleClient.SetCursor(ctx, streamKey, lastMsg.ID)
+				}
+			}
+		}
+	}
+
+	if len(messages) > 0 {
 		var buf bytes.Buffer
 		for _, m := range messages {
 			buf.WriteString(FormatMessage(m))

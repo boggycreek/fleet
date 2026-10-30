@@ -32,6 +32,13 @@ type mockBackplaneClient struct {
 	recvCalled   int
 	statusCalled int
 	lastBlockSec int
+
+	ensembles       []string
+	ensemblesErr    error
+	ensembleMsgs    map[string][]*libbp.Message
+	ensembleErr     error
+	cursors         map[string]string
+	setCursorCalled map[string]string
 }
 
 func (m *mockBackplaneClient) Recv(ctx context.Context, blockSeconds int) ([]*libbp.Message, error) {
@@ -45,6 +52,48 @@ func (m *mockBackplaneClient) Recv(ctx context.Context, blockSeconds int) ([]*li
 	msgs := m.recvMessages
 	m.recvMessages = nil // Drain
 	return msgs, nil
+}
+
+func (m *mockBackplaneClient) ListJoinedEnsembles(ctx context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ensemblesErr != nil {
+		return nil, m.ensemblesErr
+	}
+	return m.ensembles, nil
+}
+
+func (m *mockBackplaneClient) ReadEnsembleMessages(ctx context.Context, ensembleName, lastID string, count int) ([]*libbp.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ensembleErr != nil {
+		return nil, m.ensembleErr
+	}
+	if m.ensembleMsgs == nil {
+		return nil, nil
+	}
+	msgs := m.ensembleMsgs[ensembleName]
+	delete(m.ensembleMsgs, ensembleName)
+	return msgs, nil
+}
+
+func (m *mockBackplaneClient) GetCursor(ctx context.Context, streamKey string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cursors == nil {
+		return "0-0", nil
+	}
+	return m.cursors[streamKey], nil
+}
+
+func (m *mockBackplaneClient) SetCursor(ctx context.Context, streamKey string, lastID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.setCursorCalled == nil {
+		m.setCursorCalled = make(map[string]string)
+	}
+	m.setCursorCalled[streamKey] = lastID
+	return nil
 }
 
 func (m *mockBackplaneClient) GetPollInterval(ctx context.Context) (int, error) {
@@ -555,6 +604,34 @@ func TestDaemonRunIntervalFallbacksAndSleeperError(t *testing.T) {
 	if err == nil || err.Error() != "custom sleeper error" {
 		t.Errorf("expected custom sleeper error, got %v", err)
 	}
+
+	// Test Tick error branch in Run with sleeper returning context.Canceled and custom error
+	_ = os.Remove(cfg.AttachLockFile)
+	client.statusErr = errors.New("status update failed in tick")
+	client.recvErr = errors.New("recv failed")
+	// Make getSessionID fail or runner fail to make Tick fail?
+	// Notice in Tick: if runner returns error, Tick increments consecutive failures and sets status degraded, returning error if max consecutive failures reached!
+	d.cfg.MaxConsecutiveFailures = 1
+	d.SetRunner(func(_ context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) error {
+		return errors.New("runner failed")
+	})
+	// Trigger pending batch so runner is called and fails
+	_ = d.appendPendingBatch("trigger run\n")
+
+	d.SetSleeper(func(_ context.Context, _ time.Duration) error {
+		return context.Canceled
+	})
+	if err := d.Run(context.Background()); err != nil {
+		t.Errorf("expected nil on sleeper context.Canceled, got %v", err)
+	}
+
+	_ = d.appendPendingBatch("trigger run again\n")
+	d.SetSleeper(func(_ context.Context, _ time.Duration) error {
+		return errors.New("backoff error")
+	})
+	if err := d.Run(context.Background()); err == nil || err.Error() != "backoff error" {
+		t.Errorf("expected 'backoff error', got %v", err)
+	}
 }
 
 func TestDaemonFileHelpersEdgeCases(t *testing.T) {
@@ -595,3 +672,66 @@ func TestDaemonFileHelpersEdgeCases(t *testing.T) {
 	}
 	_ = d.clearPendingBatch()
 }
+
+func TestDaemonTickEnsembleDraining(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &Config{
+		AgentName:              "test-agent",
+		StateDir:               tmpDir,
+		DefaultIntervalSecs:    60,
+		ClaudeTimeoutSecs:      10,
+		MaxConsecutiveFailures: 3,
+		AttachLockFile:         filepath.Join(tmpDir, "attached"),
+		RunnerCmd:              "dummy-runner",
+	}
+
+	client := &mockBackplaneClient{
+		ensembles: []string{"team-dev"},
+		ensembleMsgs: map[string][]*libbp.Message{
+			"team-dev": {
+				{ID: "100-0", Citation: "lead#1", Content: "ensemble ping", Timestamp: time.Now().UnixMilli()},
+			},
+		},
+	}
+
+	var executedStdin string
+	runner := func(ctx context.Context, cmdName string, cmdArgs []string, stdin io.Reader, stdout, stderr io.Writer) error {
+		buf := new(bytes.Buffer)
+		_, _ = buf.ReadFrom(stdin)
+		executedStdin = buf.String()
+		return nil
+	}
+
+	d, err := NewDaemon(cfg, client, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("NewDaemon failed: %v", err)
+	}
+	d.SetRunner(runner)
+
+	ctx := context.Background()
+	if err := d.Tick(ctx); err != nil {
+		t.Fatalf("Tick failed: %v", err)
+	}
+
+	if !strings.Contains(executedStdin, "ensemble ping") {
+		t.Errorf("expected executedStdin to contain ensemble ping, got: %q", executedStdin)
+	}
+
+	if client.setCursorCalled[libbp.EnsembleOutKey("team-dev")] != "100-0" {
+		t.Errorf("expected cursor to be set to 100-0, got %q", client.setCursorCalled[libbp.EnsembleOutKey("team-dev")])
+	}
+
+	// Test error cases in ensemble polling
+	client.ensemblesErr = errors.New("valkey disconnected")
+	if err := d.Tick(ctx); err != nil {
+		t.Errorf("expected graceful handling of ensemblesErr, got error: %v", err)
+	}
+
+	client.ensemblesErr = nil
+	client.ensembles = []string{"team-dev"}
+	client.ensembleErr = errors.New("read stream failed")
+	if err := d.Tick(ctx); err != nil {
+		t.Errorf("expected graceful handling of ensembleErr, got error: %v", err)
+	}
+}
+

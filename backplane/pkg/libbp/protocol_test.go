@@ -112,3 +112,39 @@ func TestParseIdentityRecord(t *testing.T) {
 		t.Errorf("expected error for invalid json, got nil")
 	}
 }
+
+func TestEnsembleKeysAndValidation(t *testing.T) {
+	if got := EnsembleOutKey("Alpha-Team"); got != "ensemble:alpha-team:out" {
+		t.Errorf("EnsembleOutKey: got %q, want 'ensemble:alpha-team:out'", got)
+	}
+	if got := AgentEnsemblesKey("Agent-1"); got != "agent-1:ensembles" {
+		t.Errorf("AgentEnsemblesKey: got %q, want 'agent-1:ensembles'", got)
+	}
+	if got := EnsembleCursorKey("Agent-1", "Alpha-Team"); got != "agent-1:cursor:ensemble:alpha-team" {
+		t.Errorf("EnsembleCursorKey: got %q, want 'agent-1:cursor:ensemble:alpha-team'", got)
+	}
+
+	validNames := []string{"frontend", "backend-api", "team-alpha-1", "ensemble"}
+	for _, name := range validNames {
+		if err := ValidateEnsembleName(name); err != nil {
+			t.Errorf("ValidateEnsembleName(%q) unexpected error: %v", name, err)
+		}
+	}
+
+	invalidNames := []string{
+		"",
+		" ",
+		"-invalid",
+		"123-team",
+		"team_alpha",
+		"team@alpha",
+		"team.alpha",
+		"this-name-is-way-too-long-because-it-exceeds-the-maximum-allowed-length-of-sixty-four-characters",
+	}
+	for _, name := range invalidNames {
+		if err := ValidateEnsembleName(name); err == nil {
+			t.Errorf("ValidateEnsembleName(%q) expected error, got nil", name)
+		}
+	}
+}
+

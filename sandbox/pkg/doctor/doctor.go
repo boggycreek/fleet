@@ -496,6 +496,7 @@ func checkAndHealValkey(ctx context.Context, cfg *config.AgentConfig, paths conf
 		">" + cfg.Password,
 		fmt.Sprintf("~%s:*", cfg.Name),
 		fmt.Sprintf("~identity:%s", cfg.Name),
+		"~ensemble:*",
 		"%R~*:out", "%R~identity:*", "%R~human:*", "%R~*:blob:*",
 		"&*", "+@all", "-@admin", "-@dangerous",
 		"(+xadd ~*:inbox)",

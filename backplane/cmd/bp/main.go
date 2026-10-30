@@ -194,6 +194,9 @@ func RunWithContext(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case "interval":
 		return handleInterval(cmdCtx, cfg, cmdArgs, stdout, stderr)
 
+	case "ensemble":
+		return handleEnsemble(cmdCtx, cfg, cmdArgs, stdin, stdout, stderr)
+
 	case "state":
 		return handleState(cmdArgs, stdout, stderr)
 
@@ -297,6 +300,7 @@ Commands:
   state set <key> <val>            Update field in shared synaptic state (ADR 00040)
   state show                       Display entire shared synaptic state JSON (ADR 00040)
   state queue <push|pop|list>      Manage shared inter-lobe directive queue (ADR 00040)
+  ensemble <cmd> [args...]         Manage and communicate in team-scoped ensemble channels
   help [--ai]                      Show this help message (or AI agent protocol instructions)`)
 }
 
@@ -593,18 +597,6 @@ func handleReply(ctx context.Context, cfg libbp.ClientConfig, args []string, std
 	return 0
 }
 
-func handleRecv(ctx context.Context, cfg libbp.ClientConfig, args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("recv", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	blockSec := fs.Int("block", 0, "Block for N seconds waiting for messages")
-	jsonOutput := fs.Bool("json", false, "Output in JSON format")
-	if err := fs.Parse(args); err != nil {
-		return 1
-	}
-
-	return handleRecvParsed(ctx, cfg, *blockSec, *jsonOutput, stdout, stderr)
-}
-
 func handleRecvParsed(ctx context.Context, cfg libbp.ClientConfig, blockSec int, jsonOutput bool, stdout, stderr io.Writer) int {
 	client, err := getClient(ctx, cfg, stderr)
 	if err != nil {
@@ -869,6 +861,160 @@ func handleInterval(ctx context.Context, cfg libbp.ClientConfig, args []string, 
 
 	fmt.Fprintln(stderr, "Usage: bp interval [get|set <seconds>]")
 	return 1
+}
+
+func handleEnsemble(ctx context.Context, cfg libbp.ClientConfig, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "Usage: bp ensemble <create|list|join|leave|say|recv> [args...]")
+		return 1
+	}
+
+	sub := strings.ToLower(args[0])
+	subArgs := args[1:]
+
+	client, err := getClient(ctx, cfg, stderr)
+	if err != nil {
+		return 1
+	}
+	defer client.Close()
+
+	switch sub {
+	case "create":
+		if len(subArgs) < 1 {
+			fmt.Fprintln(stderr, "Usage: bp ensemble create <name>")
+			return 1
+		}
+		name := subArgs[0]
+		if err := libbp.ValidateEnsembleName(name); err != nil {
+			fmt.Fprintf(stderr, "bp: %v\n", err)
+			return 1
+		}
+		if err := client.JoinEnsemble(ctx, name); err != nil {
+			fmt.Fprintf(stderr, "bp: failed creating ensemble %s: %v\n", name, err)
+			return 1
+		}
+		msg, err := client.PublishEnsemble(ctx, name, fmt.Sprintf("Ensemble %s created by %s", name, cfg.AgentID))
+		if err != nil {
+			fmt.Fprintf(stderr, "bp: joined %s but announce failed: %v\n", name, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Created and joined ensemble %s (%s)\n", name, msg.Citation)
+		return 0
+
+	case "join":
+		if len(subArgs) < 1 {
+			fmt.Fprintln(stderr, "Usage: bp ensemble join <name>")
+			return 1
+		}
+		name := subArgs[0]
+		if err := libbp.ValidateEnsembleName(name); err != nil {
+			fmt.Fprintf(stderr, "bp: %v\n", err)
+			return 1
+		}
+		if err := client.JoinEnsemble(ctx, name); err != nil {
+			fmt.Fprintf(stderr, "bp: failed joining ensemble %s: %v\n", name, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Joined ensemble %s\n", name)
+		return 0
+
+	case "leave":
+		if len(subArgs) < 1 {
+			fmt.Fprintln(stderr, "Usage: bp ensemble leave <name>")
+			return 1
+		}
+		name := subArgs[0]
+		if err := libbp.ValidateEnsembleName(name); err != nil {
+			fmt.Fprintf(stderr, "bp: %v\n", err)
+			return 1
+		}
+		if err := client.LeaveEnsemble(ctx, name); err != nil {
+			fmt.Fprintf(stderr, "bp: failed leaving ensemble %s: %v\n", name, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Left ensemble %s\n", name)
+		return 0
+
+	case "list":
+		ensembles, err := client.ListJoinedEnsembles(ctx)
+		if err != nil {
+			fmt.Fprintf(stderr, "bp: failed listing ensembles: %v\n", err)
+			return 1
+		}
+		if len(ensembles) == 0 {
+			fmt.Fprintln(stdout, "No joined ensembles.")
+			return 0
+		}
+		for _, e := range ensembles {
+			fmt.Fprintf(stdout, "- %s\n", e)
+		}
+		return 0
+
+	case "say":
+		if len(subArgs) < 2 {
+			fmt.Fprintln(stderr, "Usage: bp ensemble say <name> <message> [--file <path>]")
+			return 1
+		}
+		name := subArgs[0]
+		var filePath string
+		var msgParts []string
+		for i := 1; i < len(subArgs); i++ {
+			if subArgs[i] == "--file" && i+1 < len(subArgs) {
+				filePath = subArgs[i+1]
+				i++
+			} else {
+				msgParts = append(msgParts, subArgs[i])
+			}
+		}
+		content := strings.Join(msgParts, " ")
+		var blobKey string
+		if filePath != "" {
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				fmt.Fprintf(stderr, "bp: error reading file: %v\n", err)
+				return 1
+			}
+			blobKey, err = client.ParkBlob(ctx, data)
+			if err != nil {
+				fmt.Fprintf(stderr, "bp: failed parking blob: %v\n", err)
+				return 1
+			}
+		}
+		msg, err := client.PublishEnsemble(ctx, name, content, blobKey)
+		if err != nil {
+			fmt.Fprintf(stderr, "bp: failed sending to ensemble %s: %v\n", name, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Sent to ensemble %s: %s\n", name, msg.Citation)
+		return 0
+
+	case "recv":
+		if len(subArgs) < 1 {
+			fmt.Fprintln(stderr, "Usage: bp ensemble recv <name> [--last <id>]")
+			return 1
+		}
+		name := subArgs[0]
+		lastID := "0-0"
+		for i := 1; i < len(subArgs); i++ {
+			if subArgs[i] == "--last" && i+1 < len(subArgs) {
+				lastID = subArgs[i+1]
+				i++
+			}
+		}
+		msgs, err := client.ReadEnsembleMessages(ctx, name, lastID, 50)
+		if err != nil {
+			fmt.Fprintf(stderr, "bp: failed reading ensemble %s: %v\n", name, err)
+			return 1
+		}
+		for _, m := range msgs {
+			fmt.Fprintf(stdout, "[%s] %s: %s\n", m.ID, m.Citation, m.Content)
+		}
+		return 0
+
+	default:
+		fmt.Fprintf(stderr, "bp: unknown ensemble command %q (see 'bp help')\n", sub)
+		return 1
+	}
 }
 
 func agentStatePath() string {
