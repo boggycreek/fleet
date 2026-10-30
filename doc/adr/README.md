@@ -36,6 +36,8 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Standardizes automated Go toolchain provisioning and multi-version management under the XDG Base Directory specification (`~/.local/share/go/sdk`), ensuring reproducible builds and quality gate execution across host environments without requiring root/sudo privileges or system-level modifications.
 - **[00047 — Project Rename from Sandbox to Fleet](00047-ProjectRenameFromSandboxToFleet.md)**  
   *Executive Summary:* Formally renames the project from Agent Sandbox ('sandbox', 'sndbx') to Fleet ('fleet', short alias 'ft'). As an alpha-stage project, this transition constitutes a clean break without backward compatibility shims. Migrates host CLI binary to 'fleet' (with 'ft' alias), in-container binary to 'fleet-agent', shared infrastructure containers/networks to 'fleet-*', host paths to ~/.local/share/fleet and ~/.ssh/fleet, SSH host aliases to fleet-<name>, and upstream GitHub repository to boggycreek/fleet. Supersedes ADR 00002.
+- **[00058 — FreeBSD Host Support Strategy, Container Isolation, and Port Runtime](00058-freebsd-host-support-strategy.md)**
+  *Executive Summary:* Evaluates FreeBSD 14.x/15.x host operating system support, comparing Linuxulator OCI execution, native FreeBSD jails, bhyve microVMs, and native host agent modes. Adopts a hybrid architecture deploying a bhyve Linux microVM for rootless OCI container parity alongside native GOOS=freebsd host CLI and agent binaries, backed by ZFS persistent storage and pf(4) firewall anchor integration.
 
 ### Container Runtime & Storage (`THEME-RUNTIME`)
 - **[00004 — Non-Root Container User and Permission Bounds](00004-NonRootContainerUserAndPermissionBounds.md)**  
