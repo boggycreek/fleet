@@ -603,6 +603,17 @@ func handleReply(ctx context.Context, cfg libbp.ClientConfig, args []string, std
 	return 0
 }
 
+func handleRecv(ctx context.Context, cfg libbp.ClientConfig, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("recv", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	blockSec := fs.Int("block", 0, "Block for N seconds waiting for messages")
+	jsonOutput := fs.Bool("json", false, "Output in JSON format")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	return handleRecvParsed(ctx, cfg, *blockSec, *jsonOutput, stdout, stderr)
+}
+
 func handleRecvParsed(ctx context.Context, cfg libbp.ClientConfig, blockSec int, jsonOutput bool, stdout, stderr io.Writer) int {
 	client, err := getClient(ctx, cfg, stderr)
 	if err != nil {
