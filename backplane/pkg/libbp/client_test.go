@@ -1106,6 +1106,14 @@ func TestVerifyMessageSecurity(t *testing.T) {
 	if !client.VerifyMessage(ctx, msgStale, true) { // skipFreshness = true
 		t.Errorf("expected stale timestamp to be accepted when skipFreshness is true")
 	}
+
+	// 4. Empty sender in VerifyMessage returns false
+	msgEmptySender := baseMsg()
+	msgEmptySender.Sender = ""
+	msgEmptySender.Signature = SignPayload(priv, msgEmptySender.SigningPayload())
+	if client.VerifyMessage(ctx, msgEmptySender, true) {
+		t.Errorf("expected empty sender to return false")
+	}
 }
 
 func TestClientEnsembleOperations(t *testing.T) {

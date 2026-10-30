@@ -61,6 +61,20 @@ func TestSigningKeypairAndPEM(t *testing.T) {
 	}
 }
 
+func TestVerifyPayloadEdgeCases(t *testing.T) {
+	// Invalid public key size (not 32 bytes)
+	badPub := []byte("short")
+	if VerifyPayload(badPub, []byte("test"), "c2lnbmF0dXJl") {
+		t.Errorf("expected VerifyPayload to return false for bad pub key size")
+	}
+
+	// Truncated signature
+	_, pub, _ := GenerateKeypair()
+	if VerifyPayload(pub, []byte("test"), "YWJj") { // "abc"
+		t.Errorf("expected VerifyPayload to return false for truncated signature")
+	}
+}
+
 func TestLoadPrivateKeyFromFile(t *testing.T) {
 	priv, _, err := GenerateKeypair()
 	if err != nil {

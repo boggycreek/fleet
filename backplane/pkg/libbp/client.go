@@ -232,49 +232,53 @@ func (c *Client) execInternal(ctx context.Context, cmd string, args ...string) (
 	}
 
 	c.mu.Lock()
-	activeConn := c.conn
+	conn := c.conn
+	reader := c.reader
+	writer := c.writer
 	c.mu.Unlock()
 
-	if activeConn != nil {
-		if deadline, ok := ctx.Deadline(); ok {
-			_ = activeConn.SetDeadline(deadline)
-		} else if minBlockDuration > 0 {
-			if c.cfg.ReadTimeout > minBlockDuration {
-				_ = activeConn.SetDeadline(time.Now().Add(c.cfg.ReadTimeout))
-			} else {
-				_ = activeConn.SetDeadline(time.Now().Add(minBlockDuration))
-			}
-		} else if c.cfg.ReadTimeout > 0 {
-			_ = activeConn.SetDeadline(time.Now().Add(c.cfg.ReadTimeout))
-		} else {
-			_ = activeConn.SetDeadline(time.Time{})
-		}
-		conn := activeConn
-		var done atomic.Bool
-		var stop func() bool
-		if ctx.Done() != nil {
-			stop = context.AfterFunc(ctx, func() {
-				if !done.Load() {
-					_ = conn.SetDeadline(time.Unix(1, 0))
-				}
-			})
-		}
-		defer func() {
-			done.Store(true)
-			if stop != nil {
-				stop()
-			}
-			if ctx.Err() != nil {
-				c.markBroken()
-			}
-			if !c.isClosed() && !c.isBroken() {
-				_ = conn.SetDeadline(time.Time{})
-			}
-		}()
+	if conn == nil || reader == nil || writer == nil {
+		return resp.Value{}, ErrClosed
 	}
 
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	} else if minBlockDuration > 0 {
+		if c.cfg.ReadTimeout > minBlockDuration {
+			_ = conn.SetDeadline(time.Now().Add(c.cfg.ReadTimeout))
+		} else {
+			_ = conn.SetDeadline(time.Now().Add(minBlockDuration))
+		}
+	} else if c.cfg.ReadTimeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(c.cfg.ReadTimeout))
+	} else {
+		_ = conn.SetDeadline(time.Time{})
+	}
+
+	var done atomic.Bool
+	var stop func() bool
+	if ctx.Done() != nil {
+		stop = context.AfterFunc(ctx, func() {
+			if !done.Load() {
+				_ = conn.SetDeadline(time.Unix(1, 0))
+			}
+		})
+	}
+	defer func() {
+		done.Store(true)
+		if stop != nil {
+			stop()
+		}
+		if ctx.Err() != nil {
+			c.markBroken()
+		}
+		if !c.isClosed() && !c.isBroken() {
+			_ = conn.SetDeadline(time.Time{})
+		}
+	}()
+
 	fullCmd := append([]string{cmd}, args...)
-	if err := c.writer.WriteCommand(fullCmd...); err != nil {
+	if err := writer.WriteCommand(fullCmd...); err != nil {
 		c.markBroken()
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return resp.Value{}, ctxErr
@@ -284,7 +288,7 @@ func (c *Client) execInternal(ctx context.Context, cmd string, args ...string) (
 		}
 		return resp.Value{}, err
 	}
-	val, err := c.reader.ReadValue()
+	val, err := reader.ReadValue()
 	if err != nil {
 		c.markBroken()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -1004,6 +1008,10 @@ func (c *Client) VerifyMessage(ctx context.Context, msg *Message, skipFreshness 
 	}
 
 	sender := strings.ToLower(msg.Sender)
+	if sender == "" {
+		return false
+	}
+
 	c.pubKeysMu.RLock()
 	pub, found := c.pubKeys[sender]
 	c.pubKeysMu.RUnlock()
@@ -1018,7 +1026,7 @@ func (c *Client) VerifyMessage(ctx context.Context, msg *Message, skipFreshness 
 		c.pubKeysMu.RUnlock()
 	}
 
-	if pub == nil {
+	if pub == nil || len(pub) != ed25519.PublicKeySize {
 		return false
 	}
 

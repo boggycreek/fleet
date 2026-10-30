@@ -15,10 +15,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/boggycreek/fleet/backplane/pkg/libbp"
+	libbpResp "github.com/boggycreek/fleet/backplane/pkg/libbp/resp"
 	"github.com/boggycreek/fleet/backplane/test/harness"
 )
 
@@ -32,6 +34,407 @@ func runCLIWithStdin(args []string, stdin io.Reader) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	code := RunWithIO(args, stdin, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
+}
+
+type mockValkeyForBp struct {
+	listener net.Listener
+}
+
+func startMockValkeyForBp(t *testing.T) (*mockValkeyForBp, int) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed starting mock listener: %v", err)
+	}
+	m := &mockValkeyForBp{listener: listener}
+	data := make(map[string]string)
+	data["poll-interval"] = "60"
+	data["human:name"] = "operator"
+	data["agent-1:blob:123"] = "blob content"
+	hashes := make(map[string]map[string]string)
+	hashes["agent-1:finger"] = map[string]string{"role": "coder", "model": "qwen"}
+	var mu sync.Mutex
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := libbpResp.NewReader(c)
+				w := libbpResp.NewWriter(c)
+				for {
+					val, err := r.ReadValue()
+					if err != nil {
+						return
+					}
+					args, err := val.AsArray()
+					if err != nil || len(args) == 0 {
+						continue
+					}
+					cmd := strings.ToUpper(args[0].String())
+					mu.Lock()
+					switch cmd {
+					case "AUTH":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeSimpleString, Str: "OK"})
+					case "PING":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeSimpleString, Str: "PONG"})
+					case "INCR":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeInteger, Num: 1})
+					case "SET":
+						if len(args) >= 3 {
+							data[args[1].String()] = args[2].String()
+						}
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeSimpleString, Str: "OK"})
+					case "GET":
+						key := ""
+						if len(args) > 1 {
+							key = args[1].String()
+						}
+						if key == "identity:agent-1" {
+							_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, Str: `{"name":"agent-1","role":"coder","kind":"agent"}`})
+						} else if key == "identity:agent-2" {
+							_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, Str: `{"name":"agent-2","role":"reviewer","kind":"agent"}`})
+						} else if key == "liaison:current" {
+							_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, Str: "agent-1"})
+						} else if v, ok := data[key]; ok {
+							_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, Str: v})
+						} else {
+							_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, IsNull: true})
+						}
+					case "HSET":
+						key := args[1].String()
+						if hashes[key] == nil {
+							hashes[key] = make(map[string]string)
+						}
+						for i := 2; i < len(args); i += 2 {
+							if i+1 < len(args) {
+								hashes[key][args[i].String()] = args[i+1].String()
+							}
+						}
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeInteger, Num: 1})
+					case "HGET":
+						key := args[1].String()
+						field := args[2].String()
+						if h, ok := hashes[key]; ok {
+							if v, ok := h[field]; ok {
+								_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, Str: v})
+							} else {
+								_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, IsNull: true})
+							}
+						} else {
+							_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, IsNull: true})
+						}
+					case "HGETALL":
+						key := args[1].String()
+						var arr []libbpResp.Value
+						if h, ok := hashes[key]; ok {
+							for k, v := range h {
+								arr = append(arr, libbpResp.Value{Type: libbpResp.TypeBulkString, Str: k}, libbpResp.Value{Type: libbpResp.TypeBulkString, Str: v})
+							}
+						}
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeArray, Array: arr})
+					case "XADD":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, Str: "1700000000000-0"})
+					case "XREVRANGE":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+							{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+								{Type: libbpResp.TypeBulkString, Str: "1700000000000-0"},
+								{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+									{Type: libbpResp.TypeBulkString, Str: "sender"},
+									{Type: libbpResp.TypeBulkString, Str: "operator"},
+									{Type: libbpResp.TypeBulkString, Str: "content"},
+									{Type: libbpResp.TypeBulkString, Str: "human broadcast"},
+									{Type: libbpResp.TypeBulkString, Str: "timestamp"},
+									{Type: libbpResp.TypeBulkString, Str: "1700000000000"},
+									{Type: libbpResp.TypeBulkString, Str: "seq"},
+									{Type: libbpResp.TypeBulkString, Str: "1"},
+								}},
+							}},
+						}})
+					case "SCAN":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+							{Type: libbpResp.TypeBulkString, Str: "0"},
+							{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+								{Type: libbpResp.TypeBulkString, Str: "identity:agent-1"},
+								{Type: libbpResp.TypeBulkString, Str: "identity:agent-2"},
+							}},
+						}})
+					case "XREAD":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+							{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+								{Type: libbpResp.TypeBulkString, Str: "agent-1:inbox"},
+								{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+									{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+										{Type: libbpResp.TypeBulkString, Str: "1700000000000-0"},
+										{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
+											{Type: libbpResp.TypeBulkString, Str: "sender"},
+											{Type: libbpResp.TypeBulkString, Str: "peer-1"},
+											{Type: libbpResp.TypeBulkString, Str: "destination"},
+											{Type: libbpResp.TypeBulkString, Str: "agent-1"},
+											{Type: libbpResp.TypeBulkString, Str: "content"},
+											{Type: libbpResp.TypeBulkString, Str: "received message"},
+											{Type: libbpResp.TypeBulkString, Str: "blob_path"},
+											{Type: libbpResp.TypeBulkString, Str: "agent-1:blob:123"},
+											{Type: libbpResp.TypeBulkString, Str: "signature"},
+											{Type: libbpResp.TypeBulkString, Str: "invalid-sig"},
+											{Type: libbpResp.TypeBulkString, Str: "timestamp"},
+											{Type: libbpResp.TypeBulkString, Str: "1700000000000"},
+											{Type: libbpResp.TypeBulkString, Str: "seq"},
+											{Type: libbpResp.TypeBulkString, Str: "10"},
+										}},
+									}},
+								}},
+							}},
+						}})
+					default:
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeSimpleString, Str: "OK"})
+					}
+					mu.Unlock()
+				}
+			}(conn)
+		}
+	}()
+	port := listener.Addr().(*net.TCPAddr).Port
+	return m, port
+}
+
+func (m *mockValkeyForBp) close() {
+	if m.listener != nil {
+		_ = m.listener.Close()
+	}
+}
+
+func TestBPCliWithMockServer(t *testing.T) {
+	srv, port := startMockValkeyForBp(t)
+	defer srv.close()
+
+	t.Setenv("BP_HOST", "127.0.0.1")
+	t.Setenv("BP_PORT", fmt.Sprintf("%d", port))
+	t.Setenv("BP_MODE", "agent")
+	t.Setenv("BP_AGENT", "agent-1")
+	t.Setenv("BP_PASSWORD", "secret")
+
+	var resCode int
+	var resOut string
+
+	// 1. whoami
+	resCode, resOut, _ = runCLI([]string{"whoami"})
+	if resCode != 0 || !strings.Contains(resOut, "Agent ID:   agent-1") {
+		t.Errorf("whoami failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// File setup for attachment testing
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "payload.txt")
+	_ = os.WriteFile(filePath, []byte("file payload line 1\nfile line 2"), 0600)
+
+	// 2. say
+	resCode, resOut, _ = runCLI([]string{"say", "hello fleet"})
+	if resCode != 0 || !strings.Contains(resOut, "hello fleet") {
+		t.Errorf("say failed: code %d, out: %s", resCode, resOut)
+	}
+
+	resCode, resOut, _ = runCLI([]string{"say", "--file", filePath, "say with file"})
+	if resCode != 0 || !strings.Contains(resOut, "say with file") {
+		t.Errorf("say --file failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 3. tell
+	resCode, resOut, _ = runCLI([]string{"tell", "agent-2", "direct message"})
+	if resCode != 0 || !strings.Contains(resOut, "direct message") {
+		t.Errorf("tell failed: code %d, out: %s", resCode, resOut)
+	}
+
+	resCode, resOut, _ = runCLI([]string{"tell", "agent-2", "--file", filePath, "tell with file"})
+	if resCode != 0 || !strings.Contains(resOut, "tell with file") {
+		t.Errorf("tell --file failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 3b. post
+	resCode, resOut, _ = runCLI([]string{"post", filePath})
+	if resCode != 0 || !strings.Contains(resOut, "Payload attached:") {
+		t.Errorf("post broadcast failed: code %d, out: %s", resCode, resOut)
+	}
+
+	resCode, resOut, _ = runCLI([]string{"post", filePath, "to", "agent-2"})
+	if resCode != 0 || !strings.Contains(resOut, "-> agent-2") {
+		t.Errorf("post direct failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// Profile directory with files
+	profDir := filepath.Join(tmpDir, "bp", "profiles")
+	_ = os.MkdirAll(profDir, 0700)
+	_ = os.WriteFile(filepath.Join(profDir, "default.env"), []byte("BP_AGENT=agent-1\n"), 0600)
+	_ = os.WriteFile(filepath.Join(profDir, "prod.env"), []byte("BP_AGENT=prod-agent\n"), 0600)
+	t.Setenv("XDG_STATE_HOME", tmpDir)
+
+	// 3c. profile list & AI help
+	resCode, resOut, _ = runCLI([]string{"profile"})
+	if resCode != 0 || !strings.Contains(resOut, "Available profiles:") {
+		t.Errorf("profile failed: code %d, out: %s", resCode, resOut)
+	}
+
+	resCode, resOut, _ = runCLI([]string{"profile", "list"})
+	if resCode != 0 || !strings.Contains(resOut, "prod") {
+		t.Errorf("profile list with files failed: code %d, out: %s", resCode, resOut)
+	}
+
+	resCode, resOut, _ = runCLI([]string{"help", "--ai"})
+	if resCode != 0 || !strings.Contains(resOut, "Protocol Guide") {
+		t.Errorf("help --ai failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 4. reply
+	resCode, resOut, _ = runCLI([]string{"reply", "1-0", "agent-2", "reply message"})
+	if resCode != 0 || !strings.Contains(resOut, "reply message") {
+		t.Errorf("reply failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 5. cat / get
+	resCode, resOut, _ = runCLI([]string{"cat", "agent-1:blob:123"})
+	if resCode != 0 || !strings.Contains(resOut, "blob content") {
+		t.Errorf("cat failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 6. recv (standard & json)
+	resCode, resOut, _ = runCLI([]string{"recv"})
+	if resCode != 0 || !strings.Contains(resOut, "received message") {
+		t.Errorf("recv failed: code %d, out: %s", resCode, resOut)
+	}
+
+	resCode, resOut, _ = runCLI([]string{"recv", "--json"})
+	if resCode != 0 || !strings.Contains(resOut, "received message") {
+		t.Errorf("recv --json failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 7. human (standard & json)
+	resCode, resOut, _ = runCLI([]string{"human"})
+	if resCode != 0 || !strings.Contains(resOut, "human broadcast") {
+		t.Errorf("human failed: code %d, out: %s", resCode, resOut)
+	}
+
+	resCode, resOut, _ = runCLI([]string{"human", "--json"})
+	if resCode != 0 || !strings.Contains(resOut, "human broadcast") {
+		t.Errorf("human --json failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 8. peers
+	resCode, resOut, _ = runCLI([]string{"peers"})
+	if resCode != 0 || !strings.Contains(resOut, "AGENT_ID") {
+		t.Errorf("peers failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 9. status set
+	resCode, resOut, _ = runCLI([]string{"status", "set", "active coding"})
+	if resCode != 0 || !strings.Contains(resOut, "status set: active coding") {
+		t.Errorf("status set failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 10. finger
+	resCode, resOut, _ = runCLI([]string{"finger"})
+	if resCode != 0 || !strings.Contains(resOut, "coder") {
+		t.Errorf("finger failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 11. liaison get & set
+	resCode, resOut, _ = runCLI([]string{"liaison", "get"})
+	if resCode != 0 {
+		t.Errorf("liaison get failed: code %d, out: %s", resCode, resOut)
+	}
+
+	resCode, resOut, _ = runCLI([]string{"liaison", "set", "agent-2"})
+	if resCode != 0 || !strings.Contains(resOut, "Liaison appointed: agent-2") {
+		t.Errorf("liaison set failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 12. interval get & set
+	resCode, resOut, _ = runCLI([]string{"interval", "get"})
+	if resCode != 0 || !strings.Contains(resOut, "60") {
+		t.Errorf("interval get failed: code %d, out: %s", resCode, resOut)
+	}
+
+	resCode, resOut, _ = runCLI([]string{"interval", "set", "30"})
+	if resCode != 0 || !strings.Contains(resOut, "Poll interval set to 30 seconds") {
+		t.Errorf("interval set failed: code %d, out: %s", resCode, resOut)
+	}
+
+	// 13. Additional flag and error branches for max coverage
+	runCLI([]string{"recv", "--block", "1"})
+
+	priv, _, _ := libbp.GenerateKeypair()
+	cfgWithKey := libbp.ClientConfig{
+		AgentID:    "operator",
+		Mode:       "human",
+		Host:       "127.0.0.1",
+		Port:       port,
+		SigningKey: priv,
+	}
+	handleWhoami(cfgWithKey, &bytes.Buffer{})
+
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" {
+		envDir := filepath.Join(homeDir, ".local", "share", "agent-sandbox")
+		_ = os.MkdirAll(envDir, 0700)
+		_ = os.WriteFile(filepath.Join(envDir, ".env"), []byte("ENV_TEST_VAR=1\n# comment\nINVALID\n"), 0600)
+		loadDefaultEnv()
+	}
+
+	t.Setenv("AGENT_STATE_FILE", "")
+	t.Setenv("AGENT_QUEUE_FILE", "")
+	_ = agentStatePath()
+	_ = agentQueuePath()
+
+	// Post variations
+	runCLI([]string{"post", "--file", filePath, "to", "agent-2"})
+	runCLI([]string{"post", "--file=" + filePath})
+	runCLIWithStdin([]string{"post", "-"}, strings.NewReader("Header summary\n\nBody line 1\nBody line 2"))
+	runCLIWithStdin([]string{"post", "-", "to", "agent-2"}, strings.NewReader("Header summary\n\nBody line 1"))
+	runCLIWithStdin([]string{"post", "--file", "-"}, strings.NewReader("Flag stdin summary\n\nBody line"))
+
+	// Tell variations
+	runCLI([]string{"tell", "agent-2", "--file=" + filePath})
+	runCLIWithStdin([]string{"tell", "agent-2", "--file", "-"}, strings.NewReader("tell stdin body"))
+	runCLI([]string{"tell", "agent-2", "--", "--msg-with-dashes"})
+
+	// Say variations
+	runCLI([]string{"say", "--file=" + filePath, "say inline"})
+	runCLIWithStdin([]string{"say", "--file", "-", "say stdin"}, strings.NewReader("say stdin payload"))
+
+	// State commands
+	runCLI([]string{"state", "set", "key1", "val1"})
+	runCLI([]string{"state", "get", "key1"})
+	runCLI([]string{"state", "get"})
+	runCLI([]string{"state", "show"})
+	runCLI([]string{"state", "queue", "push", "task 1"})
+	runCLI([]string{"state", "queue", "list"})
+	runCLI([]string{"state", "queue", "pop"})
+	runCLI([]string{"state", "queue", "clear"})
+
+	runCLI([]string{"say"})
+	runCLI([]string{"say", "--file"})
+	runCLI([]string{"say", "--invalid-flag"})
+	runCLI([]string{"tell"})
+	runCLI([]string{"tell", "agent-2"})
+	runCLI([]string{"tell", "--file"})
+	runCLI([]string{"tell", "--invalid-flag"})
+	runCLI([]string{"reply"})
+	runCLI([]string{"reply", "1-0"})
+	runCLI([]string{"post"})
+	runCLI([]string{"post", "--file"})
+	runCLI([]string{"post", filePath, "to"})
+	runCLI([]string{"post", filePath, "to", "agent-2", "extra"})
+	runCLI([]string{"post", filePath, "extra"})
+	runCLI([]string{"cat"})
+	runCLI([]string{"status"})
+	runCLI([]string{"status", "invalid"})
+	runCLI([]string{"liaison", "invalid"})
+	runCLI([]string{"liaison", "set"})
+	runCLI([]string{"interval", "invalid"})
+	runCLI([]string{"interval", "set", "invalid"})
+	runCLI([]string{"interval", "set", "4"})
+	runCLI([]string{"interval", "set", "3601"})
 }
 
 func TestBPFullCoverage(t *testing.T) {
