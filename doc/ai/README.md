@@ -14,6 +14,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[FreeBSD Host Support & Runtime Porting Guide](freebsd-host-support.md)** (`fleet-freebsd-host-support`): FreeBSD 14.x/15.x host compatibility, bhyve microVM setup, pkg package management, ZFS dataset volumes, pf.conf anchor networking, and GOOS=freebsd cross-compilation.
 - **[MCP Suite Audit Findings & Security Hardening](mcp-suite-audit-findings.md)** (`fleet-mcp-suite-audit-findings`): Adversarial security audit, input sanitization assessment, JSON-RPC 2.0 protocol compliance review, and hardening report for the MCP server suite.
 - **[Jules Collaboration & PR Review Protocol](jules-collaboration.md)** (`fleet-jules-collaboration`): Delegating audit/refactoring tasks to Jules via GitHub issues, tracking in-flight work, and conducting adversarial PR reviews.
+- **[Backplane Audit Findings](backplane-audit-findings.md)** (`fleet-backplane-audit-findings`): Targeted protocol, cryptography, and concurrency audit report and hardening fixes for backplane.
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.

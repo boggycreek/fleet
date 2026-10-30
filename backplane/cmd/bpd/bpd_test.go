@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,6 +49,85 @@ func TestRunCLIHelpAndValidation(t *testing.T) {
 	code = RunCLI([]string{}, &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "bpd connection error:") {
 		t.Errorf("expected connection error code 1, got %d (err: %s)", code, stderr.String())
+	}
+}
+
+type mockValkeyForBpd struct {
+	listener net.Listener
+}
+
+func startMockValkeyForBpd(t *testing.T) (*mockValkeyForBpd, int) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed starting mock listener: %v", err)
+	}
+	m := &mockValkeyForBpd{listener: listener}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 1024)
+				for {
+					_, err := c.Read(buf)
+					if err != nil {
+						return
+					}
+					_, _ = c.Write([]byte("+OK\r\n"))
+				}
+			}(conn)
+		}
+	}()
+	port := listener.Addr().(*net.TCPAddr).Port
+	return m, port
+}
+
+func (m *mockValkeyForBpd) close() {
+	if m.listener != nil {
+		_ = m.listener.Close()
+	}
+}
+
+func TestRunCLIMockServer(t *testing.T) {
+	srv, port := startMockValkeyForBpd(t)
+	defer srv.close()
+
+	tmpDir := t.TempDir()
+	os.Setenv("AGENT_NAME", "agent-1")
+	os.Setenv("BP_HOST", "127.0.0.1")
+	os.Setenv("BP_PORT", fmt.Sprintf("%d", port))
+	os.Setenv("BP_AGENT", "agent-1")
+	os.Setenv("BPD_STATE_DIR", filepath.Join(tmpDir, "state"))
+	os.Setenv("BPD_ATTACH_LOCK_FILE", filepath.Join(tmpDir, "lock"))
+	os.Setenv("BPD_RUNNER_CMD", "echo done")
+	os.Setenv("BPD_DEFAULT_INTERVAL_SECS", "1")
+
+	var stdout, stderr bytes.Buffer
+
+	// 1. Initialization error
+	os.Setenv("BPD_STATE_DIR", "/dev/null/forbidden/state")
+	stderr.Reset()
+	code := RunCLIContext(context.Background(), []string{}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "bpd initialization error:") {
+		t.Errorf("expected code 1 on init error, got %d (err: %s)", code, stderr.String())
+	}
+
+	// 2. Successful execution stopped by canceled context
+	os.Setenv("BPD_STATE_DIR", filepath.Join(tmpDir, "state"))
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(15 * time.Millisecond)
+		cancel()
+	}()
+
+	stdout.Reset()
+	stderr.Reset()
+	code = RunCLIContext(ctx, []string{}, &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("expected code 0 on canceled context, got %d (err: %s)", code, stderr.String())
 	}
 }
 

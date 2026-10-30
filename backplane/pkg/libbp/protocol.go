@@ -49,6 +49,7 @@ func SeqKey(id string) string    { return fmt.Sprintf("%s:seq", strings.ToLower(
 func CursorKey(id string) string { return fmt.Sprintf("%s:cursor", strings.ToLower(id)) }
 func StatusKey(id string) string { return fmt.Sprintf("%s:status", strings.ToLower(id)) }
 func FingerKey(id string) string { return fmt.Sprintf("%s:finger", strings.ToLower(id)) }
+func TeamChannel(team string) string { return fmt.Sprintf("team:%s:out", strings.ToLower(team)) }
 func BlobKey(id string, ts int64) string {
 	return fmt.Sprintf("%s:blob:%d", strings.ToLower(id), ts)
 }

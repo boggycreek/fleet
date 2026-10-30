@@ -129,6 +129,7 @@ func TestRESPReaderErrors(t *testing.T) {
 		{"InvalidArrayCount", "*invalid\r\n"},
 		{"InvalidMapCount", "%invalid\r\n"},
 		{"TruncatedBulk", "$10\r\nshort\r\n"},
+		{"MissingBulkCRLF", "$5\r\nhelloXX"},
 	}
 
 	for _, tc := range errorInputs {

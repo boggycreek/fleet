@@ -158,13 +158,16 @@ func (r *Reader) readValueWithDepth(depth int) (Value, error) {
 func (r *Reader) readLine() ([]byte, error) {
 	var line []byte
 	for {
-		chunk, err := r.r.ReadBytes('\n')
-		if err != nil {
+		chunk, err := r.r.ReadSlice('\n')
+		if err != nil && !errors.Is(err, bufio.ErrBufferFull) {
 			return nil, err
 		}
 		line = append(line, chunk...)
 		if len(line) > MaxLineLength {
 			return nil, fmt.Errorf("%w: line length exceeds max %d", ErrProtocol, MaxLineLength)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
 		}
 		if len(line) >= 2 && line[len(line)-2] == '\r' && line[len(line)-1] == '\n' {
 			return line[:len(line)-2], nil

@@ -137,6 +137,45 @@ func TestStreamListenerListen(t *testing.T) {
 	}
 }
 
+func TestStreamListenerContextCanceledInHandlerAndBackoff(t *testing.T) {
+	// 1. Context canceled inside message processing loop
+	rec := &mockStreamReceiver{
+		messages: [][]*libbp.Message{
+			{
+				{ID: "1-0", Content: "first"},
+				{ID: "2-0", Content: "second"},
+			},
+		},
+	}
+	l := NewStreamListener(rec, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	err := l.Listen(ctx, func(_ context.Context, msg *libbp.Message) error {
+		if msg.Content == "first" {
+			cancel() // cancel context on first message
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	// 2. Context canceled during error backoff sleep
+	recErr := &mockStreamReceiver{
+		errs: []error{errors.New("rec error")},
+	}
+	lErr := NewStreamListener(recErr, 1)
+	lErr.SetBackoff(100 * time.Millisecond)
+
+	ctxErr, cancelErr := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancelErr()
+
+	errBackoff := lErr.Listen(ctxErr, func(_ context.Context, _ *libbp.Message) error { return nil })
+	if !errors.Is(errBackoff, context.DeadlineExceeded) && !errors.Is(errBackoff, context.Canceled) {
+		t.Fatalf("expected context cancellation during backoff, got %v", errBackoff)
+	}
+}
+
 func TestStreamListenerListenContextCanceledEarly(t *testing.T) {
 	rec := &mockStreamReceiver{}
 	l := NewStreamListener(rec, 1)

@@ -39,6 +39,13 @@ Environment Variables:
 
 // RunCLI executes the bpd command-line entrypoint.
 func RunCLI(args []string, stdout, stderr io.Writer) int {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return RunCLIContext(ctx, args, stdout, stderr)
+}
+
+// RunCLIContext executes the bpd CLI with an explicit context.
+func RunCLIContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		arg := strings.ToLower(args[0])
 		if arg == "help" || arg == "-h" || arg == "--help" {
@@ -54,8 +61,6 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 	}
 
 	clientCfg := libbp.LoadClientFromEnv()
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	client, err := libbp.Dial(ctx, clientCfg)
 	if err != nil {

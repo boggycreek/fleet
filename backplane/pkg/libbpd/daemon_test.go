@@ -634,6 +634,100 @@ func TestDaemonRunIntervalFallbacksAndSleeperError(t *testing.T) {
 	}
 }
 
+func TestDaemonRunTickErrorBackoff(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &Config{
+		AgentName:           "tick-err-agent",
+		StateDir:            tmpDir,
+		DefaultIntervalSecs: 5,
+		AttachLockFile:      filepath.Join(tmpDir, "lock"),
+		RunnerCmd:           "dummy",
+	}
+
+	client := &mockBackplaneClient{}
+	d, err := NewDaemon(cfg, client, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("NewDaemon failed: %v", err)
+	}
+
+	// Make pending-batch a directory so Tick returns an error
+	_ = os.Mkdir(d.pendingBatchFile(), 0700)
+
+	// 1. Sleeper returns context.Canceled -> Run returns nil
+	d.SetSleeper(func(ctx context.Context, d time.Duration) error {
+		return context.Canceled
+	})
+
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("expected nil when sleeper returns context.Canceled, got %v", err)
+	}
+
+	// 2. Sleeper returns custom error -> Run returns custom error
+	customErr := errors.New("custom sleep error")
+	d.SetSleeper(func(ctx context.Context, d time.Duration) error {
+		return customErr
+	})
+
+	if err := d.Run(context.Background()); !errors.Is(err, customErr) {
+		t.Fatalf("expected customErr, got %v", err)
+	}
+}
+
+func TestDaemonTickEdgeCases(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &Config{
+		AgentName: "edge-agent",
+		StateDir:  tmpDir,
+		RunnerCmd: "", // Empty runner command
+	}
+
+	client := &mockBackplaneClient{}
+
+	d, err := NewDaemon(cfg, client, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("NewDaemon failed: %v", err)
+	}
+
+	// 1. Empty runner command returns error when pending batch exists
+	_ = d.appendPendingBatch("pending content")
+	err = d.Tick(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "empty runner command") {
+		t.Errorf("expected empty runner command error, got %v", err)
+	}
+
+	d.cfg.RunnerCmd = "dummy-runner"
+	d.SetRunner(func(_ context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) error {
+		return nil
+	})
+
+	// 2. Error appending to pending batch
+	client.recvMessages = []*libbp.Message{{Content: "hello"}}
+	_ = os.Remove(d.pendingBatchFile())
+	_ = os.Mkdir(d.pendingBatchFile(), 0700)
+	err = d.Tick(context.Background())
+	if err == nil {
+		t.Errorf("expected error appending pending batch, got nil")
+	}
+	_ = os.RemoveAll(d.pendingBatchFile())
+
+	// 3. Error reading pending batch
+	_ = os.Mkdir(d.pendingBatchFile(), 0700)
+	err = d.Tick(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "failed reading pending batch") {
+		t.Errorf("expected failed reading pending batch error, got %v", err)
+	}
+	_ = os.RemoveAll(d.pendingBatchFile())
+
+	// 4. Error with session-id file
+	_ = os.WriteFile(d.pendingBatchFile(), []byte("pending batch\n"), 0600)
+	_ = os.RemoveAll(d.sessionIDFile())
+	_ = os.Mkdir(d.sessionIDFile(), 0700)
+	err = d.Tick(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "session-id") {
+		t.Errorf("expected session-id error, got %v", err)
+	}
+}
+
 func TestDaemonFileHelpersEdgeCases(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &Config{AgentName: "edge", StateDir: tmpDir}

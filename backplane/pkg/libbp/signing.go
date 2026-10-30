@@ -97,6 +97,9 @@ func SignPayload(priv ed25519.PrivateKey, payload []byte) string {
 
 // VerifyPayload verifies the base64 signature against the payload using the public key
 func VerifyPayload(pub ed25519.PublicKey, payload []byte, sigBase64 string) bool {
+	if len(pub) != ed25519.PublicKeySize {
+		return false
+	}
 	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sigBase64))
 	if err != nil || len(sig) != ed25519.SignatureSize {
 		return false

@@ -29,6 +29,9 @@ func TestKeyHelpers(t *testing.T) {
 	if FingerKey("Agent-1") != "agent-1:finger" {
 		t.Errorf("FingerKey failed: %s", FingerKey("Agent-1"))
 	}
+	if TeamChannel("Alpha") != "team:alpha:out" {
+		t.Errorf("TeamChannel failed: %s", TeamChannel("Alpha"))
+	}
 	if BlobKey("Agent-1", 1726000000) != "agent-1:blob:1726000000" {
 		t.Errorf("BlobKey failed: %s", BlobKey("Agent-1", 1726000000))
 	}
