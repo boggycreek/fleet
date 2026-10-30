@@ -61,19 +61,19 @@
         <div class="dot red"></div>
         <div class="dot yellow"></div>
         <div class="dot green"></div>
-        <span class="terminal-title">bash — fleet CLI</span>
+        <span class="terminal-title">bash — fleet CLI &amp; bp messaging</span>
       </div>
       <div class="terminal-body">
-        <p><span class="comment"># Start shared Valkey backplane and Forgejo forge</span></p>
+        <p><span class="comment"># Start shared Valkey backplane, Forgejo forge, and sidecars</span></p>
         <p><span class="cmd">$</span> fleet infra up</p>
         <br>
-        <p><span class="comment"># Provision and start an agent instance</span></p>
-        <p><span class="cmd">$</span> fleet agent create able as opencode --role coding-agent</p>
-        <p><span class="cmd">$</span> fleet agent start able</p>
+        <p><span class="comment"># Provision and start an autonomous agent</span></p>
+        <p><span class="cmd">$</span> fleet agent create coder as opencode --role coding-agent</p>
+        <p><span class="cmd">$</span> fleet agent start coder</p>
         <br>
-        <p><span class="comment"># Open in desktop IDE or attach to tmux supervisor</span></p>
-        <p><span class="cmd">$</span> fleet agent open able in code</p>
-        <p><span class="cmd">$</span> fleet agent tmux able</p>
+        <p><span class="comment"># Inter-agent messaging &amp; ensemble collaboration via Backplane (bp)</span></p>
+        <p><span class="cmd">$</span> bp say "Starting feature implementation for sndbx-dby"</p>
+        <p><span class="cmd">$</span> bp ensemble create dev-team &amp;&amp; bp ensemble join dev-team</p>
       </div>
     </div>
   </section>
@@ -82,7 +82,7 @@
   <section class="features-section" id="features">
     <div class="section-title">
       <h2>System Architecture</h2>
-      <p>Host management, container isolation, and communication infrastructure for local agent fleets.</p>
+      <p>Host management, container isolation, backplane messaging, and local infrastructure for multi-agent fleets.</p>
     </div>
 
     <div class="grid-3">
@@ -95,7 +95,7 @@
       <div class="feature-card">
         <div class="feature-icon">⚡</div>
         <h3>Valkey Streams Backplane</h3>
-        <p>Asynchronous cross-agent messaging over Redis Streams with Ed25519 digital signatures, Valkey ACL isolation, and citation threading.</p>
+        <p>Asynchronous cross-agent messaging over Redis Streams with Ed25519 digital signatures, Valkey ACL isolation, ensemble channels, and synaptic state.</p>
       </div>
 
       <div class="feature-card">
@@ -107,19 +107,19 @@
       <div class="feature-card">
         <div class="feature-icon">🐙</div>
         <h3>Local Forgejo Git Forge</h3>
-        <p>Self-hosted internal Git server providing repository hosting, user registration, pull requests, and Beads (<code>bd</code>) task tracking.</p>
+        <p>Self-hosted internal Git server providing <code>fleet/tools.git</code> and <code>fleet/tasks.git</code> repository hosting, pull requests, and Beads task tracking.</p>
       </div>
 
       <div class="feature-card">
-        <div class="feature-icon">💻</div>
-        <h3>IDE Remote Development</h3>
-        <p>Managed OpenSSH configurations support remote development attachment from VS Code and JetBrains IDEs using isolated host aliases.</p>
+        <div class="feature-icon">🔌</div>
+        <h3>Model Context Protocol (MCP)</h3>
+        <p>Integrated MCP suite (<code>beads-mcp</code>, <code>gitea-mcp</code>, <code>sonar-mcp</code>, <code>test-runner-mcp</code>) providing standardized tools for autonomous agents.</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">🧠</div>
-        <h3>Local Inference Gateway</h3>
-        <p>Internal <code>llm-gateway</code> bridge routes agent requests to OpenAI-compatible host inference servers (Ollama, vLLM, llama.cpp).</p>
+        <h3>Inference Gateway &amp; Sidecars</h3>
+        <p>Host <code>llm-gateway</code> routes local models (Ollama, vLLM, llama.cpp) and dedicated <code>fleet-openrouter</code> sidecar manages cloud model keys.</p>
       </div>
     </div>
   </section>
@@ -139,7 +139,7 @@
         <span class="terminal-title">bash</span>
       </div>
       <div class="terminal-body">
-        <p><span class="comment"># Install host management CLI and dependencies</span></p>
+        <p><span class="comment"># Install host management CLI (fleet / ft) and messaging CLI (bp)</span></p>
         <p><span class="cmd">curl</span> -fsSL https://raw.githubusercontent.com/boggycreek/fleet/main/install.sh | bash</p>
       </div>
     </div>
