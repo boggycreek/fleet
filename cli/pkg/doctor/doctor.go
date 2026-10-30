@@ -120,7 +120,7 @@ func checkAndHealConfig(ctx context.Context, paths config.Paths, name string, re
 	}
 
 	healed := false
-	if !cfg.IsNoContainer() {
+	if !cfg.IsNoContainer() && !cfg.IsBaremetal() {
 		if cfg.ContainerName == "" {
 			cfg.ContainerName = fmt.Sprintf("fleet-agent-%s", name)
 			healed = true
@@ -183,6 +183,14 @@ func checkAndHealPodmanStorage(ctx context.Context, cfg *config.AgentConfig, rep
 			Name:    "Podman Storage",
 			Status:  StatusOK,
 			Message: "No-container agent (direct host execution, no container storage required)",
+		})
+		return
+	}
+	if cfg.IsBaremetal() {
+		report.Checks = append(report.Checks, CheckItem{
+			Name:    "Podman Storage",
+			Status:  StatusOK,
+			Message: "Baremetal agent (physical host execution, no local container storage required)",
 		})
 		return
 	}
@@ -290,6 +298,14 @@ func checkAndHealImage(ctx context.Context, cfg *config.AgentConfig, paths confi
 		})
 		return
 	}
+	if cfg.IsBaremetal() {
+		report.Checks = append(report.Checks, CheckItem{
+			Name:    "Agent Image",
+			Status:  StatusOK,
+			Message: "Baremetal agent (no OCI container image required)",
+		})
+		return
+	}
 	resolved, isLocal := runtime.ResolveAgentImage(ctx, cfg.Image)
 	if resolved != cfg.Image {
 		cfg.Image = resolved
@@ -320,13 +336,20 @@ func checkAndHealImage(ctx context.Context, cfg *config.AgentConfig, paths confi
 	}
 }
 
-
 func checkAndHealContainer(ctx context.Context, cfg *config.AgentConfig, paths config.Paths, report *DoctorReport) {
 	if cfg.IsNoContainer() {
 		report.Checks = append(report.Checks, CheckItem{
 			Name:    "Container & Runtime",
 			Status:  StatusOK,
 			Message: "No-container agent (direct host execution, no container runtime required)",
+		})
+		return
+	}
+	if cfg.IsBaremetal() {
+		report.Checks = append(report.Checks, CheckItem{
+			Name:    "Container & Runtime",
+			Status:  StatusOK,
+			Message: fmt.Sprintf("Baremetal agent (executes via systemd --user on %s)", cfg.SSHHost),
 		})
 		return
 	}

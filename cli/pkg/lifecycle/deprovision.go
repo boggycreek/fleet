@@ -140,8 +140,8 @@ func DeprovisionAgent(ctx context.Context, cfg *config.AgentConfig, paths config
 	report := NewProvisioningReport(cfg.Name, "deprovision")
 
 	// 1. Destroy container and persistent volume
-	if cfg.IsNoContainer() {
-		report.AddStep("Container & Volume", StatusSkipped, "No-container agent has no container or volume to destroy (skipped)", nil)
+	if cfg.IsNoContainer() || cfg.IsBaremetal() {
+		report.AddStep("Container & Volume", StatusSkipped, "No-container/baremetal agent has no container or volume to destroy (skipped)", nil)
 	} else if err := runtime.DestroyAgentContainer(ctx, cfg.ContainerName, cfg.VolumeName); err != nil {
 		report.AddStep("Container & Volume", StatusError, fmt.Sprintf("Failed to remove container/volume: %v", err), err)
 	} else {
@@ -179,8 +179,8 @@ func DeprovisionAgent(ctx context.Context, cfg *config.AgentConfig, paths config
 	}
 
 	// 5. Deprovision SonarQube user & analysis tokens
-	if cfg.IsNoContainer() {
-		report.AddStep("SonarQube Account", StatusSkipped, "No-container agent has no SonarQube account (skipped)", nil)
+	if cfg.IsNoContainer() || cfg.IsBaremetal() {
+		report.AddStep("SonarQube Account", StatusSkipped, "No-container/baremetal agent has no SonarQube account (skipped)", nil)
 	} else if os.Getenv("SONAR_DISABLED") == "1" || (cfg.SonarToken == "" && os.Getenv("SONAR_HOST_URL") == "") {
 		report.AddStep("SonarQube Account", StatusSkipped, "SonarQube is disabled or not provisioned for agent (skipped)", nil)
 	} else if err := DeprovisionSonarUser(ctx, cfg.Name); err == nil {

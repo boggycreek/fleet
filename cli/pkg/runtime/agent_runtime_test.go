@@ -87,6 +87,42 @@ func TestFormatSSHConfigBlock(t *testing.T) {
 	if !strings.Contains(block, "known_hosts.fleet-alpha") {
 		t.Errorf("expected known_hosts.fleet-alpha in UserKnownHostsFile: %s", block)
 	}
+
+	// Test baremetal format
+	cfg := &config.AgentConfig{
+		Name:      "bare-node",
+		Baremetal: true,
+		SSHHost:   "192.168.1.50",
+		SSHPort:   22,
+		SSHUser:   "debian",
+	}
+	bareBlock := FormatBaremetalSSHConfigBlock(cfg, "/home/test/.ssh/fleet")
+	if !strings.Contains(bareBlock, "Host fleet-bare-node") ||
+		!strings.Contains(bareBlock, "HostName 192.168.1.50") ||
+		!strings.Contains(bareBlock, "Port 22") ||
+		!strings.Contains(bareBlock, "User debian") ||
+		!strings.Contains(bareBlock, "StrictHostKeyChecking accept-new") {
+		t.Errorf("unexpected FormatBaremetalSSHConfigBlock output: %s", bareBlock)
+	}
+
+	// Test FormatAgentSSHConfigBlock dispatcher
+	agentBlock := FormatAgentSSHConfigBlock(cfg, 0, "/home/test/.ssh/fleet")
+	if agentBlock != bareBlock {
+		t.Errorf("expected FormatAgentSSHConfigBlock to match FormatBaremetalSSHConfigBlock: %s", agentBlock)
+	}
+
+	containerCfg := &config.AgentConfig{Name: "cont-node"}
+	contBlock := FormatAgentSSHConfigBlock(containerCfg, 2222, "/home/test/.ssh/fleet")
+	if !strings.Contains(contBlock, "Host fleet-cont-node") || !strings.Contains(contBlock, "Port 2222") {
+		t.Errorf("unexpected FormatAgentSSHConfigBlock for container: %s", contBlock)
+	}
+
+	// Default values when fields empty
+	emptyCfg := &config.AgentConfig{Name: "def-node", Baremetal: true}
+	defBlock := FormatBaremetalSSHConfigBlock(emptyCfg, "")
+	if !strings.Contains(defBlock, "HostName 127.0.0.1") || !strings.Contains(defBlock, "Port 22") {
+		t.Errorf("unexpected defaults in FormatBaremetalSSHConfigBlock: %s", defBlock)
+	}
 }
 
 func TestSyncSSHConfigFileWithMockPorts(t *testing.T) {
@@ -112,8 +148,16 @@ func TestSyncSSHConfigFileWithMockPorts(t *testing.T) {
 
 	cfg1 := &config.AgentConfig{Name: "agent-1", ContainerName: "fleet-agent-1"}
 	cfg2 := &config.AgentConfig{Name: "agent-2", ContainerName: "fleet-agent-2"}
+	cfgBare := &config.AgentConfig{
+		Name:      "agent-bare",
+		Baremetal: true,
+		SSHHost:   "10.0.0.42",
+		SSHPort:   2222,
+		SSHUser:   "nodeuser",
+	}
 	_ = config.SaveAgentConfig(cfg1, paths)
 	_ = config.SaveAgentConfig(cfg2, paths)
+	_ = config.SaveAgentConfig(cfgBare, paths)
 
 	err := UpdateSSHConfig(ctx, paths)
 	if err != nil {
@@ -124,8 +168,11 @@ func TestSyncSSHConfigFileWithMockPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed reading synced ssh config: %v", err)
 	}
-	if !strings.Contains(string(data), "Host fleet-agent-1") || !strings.Contains(string(data), "Host fleet-agent-2") {
-		t.Errorf("expected both host blocks in sync'd config, got: %s", string(data))
+	if !strings.Contains(string(data), "Host fleet-agent-1") ||
+		!strings.Contains(string(data), "Host fleet-agent-2") ||
+		!strings.Contains(string(data), "Host fleet-agent-bare") ||
+		!strings.Contains(string(data), "HostName 10.0.0.42") {
+		t.Errorf("expected host blocks including baremetal in sync'd config, got: %s", string(data))
 	}
 
 	// Test fallback when SSHConfigFile is empty
