@@ -6,8 +6,8 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -25,26 +25,15 @@ func TestAgentCreateRollbackOnFailure(t *testing.T) {
 		t.Fatalf("failed to ensure directories: %v", err)
 	}
 
-	// Make EnsureIDEKeypair fail during ProvisionAgent:
-	// Create ~/.ssh/fleet as a directory containing an unwritable file so it cannot be read as a key nor removed
-	sshDir := filepath.Join(tmpDir, ".ssh")
-	keyDir := filepath.Join(sshDir, "fleet")
-	if err := os.MkdirAll(keyDir, 0755); err != nil {
-		t.Fatalf("failed to create keyDir: %v", err)
-	}
-	blockerFile := filepath.Join(keyDir, "blocker")
-	if err := os.WriteFile(blockerFile, []byte("x"), 0400); err != nil {
-		t.Fatalf("failed to create blockerFile: %v", err)
-	}
-	// Make sshDir read-only so os.Remove(keyDir) fails with permission denied
-	_ = os.Chmod(sshDir, 0555)
-	t.Cleanup(func() {
-		_ = os.Chmod(sshDir, 0755)
-		_ = os.Chmod(keyDir, 0755)
-		_ = os.RemoveAll(sshDir)
-	})
+	// Point Forgejo to an HTTP test server returning 500 Internal Server Error to trigger a StatusError during ProvisionAgent
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+	t.Setenv("FORGEJO_URL", ts.URL)
+	t.Setenv("GITEA_URL", ts.URL)
 
-	// 1. Create agent, expecting failure due to Provisioning errors (EnsureIDEKeypair)
+	// 1. Create agent, expecting failure due to Provisioning errors (Forgejo HTTP 500)
 	code, out, errOut := runFleet([]string{"agent", "create", "fail-bot", "as", "base"})
 
 	// Create should return 1 due to provisioning errors and rollback
