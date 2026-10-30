@@ -78,6 +78,8 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Backplane IPC protocol logic is implemented in a native Go library (`libbp`) and planned for export as a shared C ABI (`libbp.so`) for polyglot agent runtimes.
 - **[00042 — Universal Cryptographic Backplane Fabric and Stateless Identity Profiles](00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md)**  
   *Executive Summary:* Establishes a universal, topology-agnostic backplane communication fabric governed by non-repudiable cryptographic identity, strict capability-bounded message streams, and stateless connection profile resolution. Supersedes ADR 00010 and ADR 00011.
+- **[00050 — Dev Container Security Screening, Diagnostics, and Privilege Escalation Sanitizer](00050-DevContainerSecurityScreeningAndPrivilegeEscalationSanitizer.md)**
+  *Executive Summary:* Establishes automated static policy screening and sanitization for devcontainer.json configurations, proactively detecting and neutralizing privilege escalation vectors, forbidden capabilities, and dangerous host mounts before agent container instantiation.
 
 ### Network Isolation & Perimeter Defense (`THEME-NETWORKING`)
 - **[00013 — Per-Instance Network Isolation](00013-PerInstanceNetworkIsolation.md)**  
