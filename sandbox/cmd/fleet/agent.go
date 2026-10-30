@@ -22,6 +22,7 @@ import (
 
 	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
 	"github.com/boggycreek/sandbox/pkg/config"
+	"github.com/boggycreek/sandbox/pkg/devcontainer"
 	"github.com/boggycreek/sandbox/pkg/doctor"
 	"github.com/boggycreek/sandbox/pkg/ide"
 	"github.com/boggycreek/sandbox/pkg/lifecycle"
@@ -211,9 +212,14 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 	isHostContainer := false
 	isNoContainer := false
 	var pwdPath string
+	var dockerfilePath string
+	var engineType string
 	fs := flag.NewFlagSet("agent create", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&image, "image", image, "OCI image or preset (base, tool, core, native, opencode, claude, agy, pig)")
+	fs.StringVar(&dockerfilePath, "dockerfile", "", "Path to custom Dockerfile or Containerfile to build")
+	fs.StringVar(&dockerfilePath, "f", "", "Path to custom Dockerfile or Containerfile to build (shorthand)")
+	fs.StringVar(&engineType, "engine", "fleet-agent", "Cognitive engine harness for custom composed image (default, claude, opencode, pig, agy)")
 	fs.StringVar(&role, "role", "coding-agent", "Role metadata description")
 	fs.StringVar(&modelURL, "model-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI-compatible inference endpoint URL")
 	fs.StringVar(&modelName, "model-name", os.Getenv("OPENAI_MODEL"), "Target model name")
@@ -285,16 +291,78 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 		absPwd = cleanPwd
 	}
 
-	if image == "" {
+	contextDir := absPwd
+	if contextDir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			contextDir = cwd
+		}
+	}
+
+	// Discover local Dockerfile or devcontainer conventions if custom build requested or default empty
+	localDockerfile, localDevcontainer := findLocalAgentDockerfile(contextDir)
+
+	shouldBuildCustom := dockerfilePath != "" ||
+		strings.EqualFold(image, "devcontainer") ||
+		strings.EqualFold(image, "auto") ||
+		strings.EqualFold(image, "custom")
+
+	if !shouldBuildCustom && image == "" && (localDockerfile != "" || localDevcontainer != "") {
+		shouldBuildCustom = true
+	}
+
+	resolvedImage := image
+	if shouldBuildCustom && !isNoContainer {
+		targetDockerfile := dockerfilePath
+		if targetDockerfile == "" {
+			if localDockerfile != "" {
+				targetDockerfile = localDockerfile
+			} else if localDevcontainer != "" {
+				genOut := filepath.Join(filepath.Dir(localDevcontainer), "Containerfile.fleet")
+				content, res, genErr := devcontainer.GenerateContainerfileFromFile(localDevcontainer, engineType)
+				if genErr != nil {
+					fmt.Fprintf(stderr, "%s error generating Containerfile from %s: %v\n", bin, localDevcontainer, genErr)
+					return 1
+				}
+				if res != nil && len(res.Warnings) > 0 {
+					for _, w := range res.Warnings {
+						fmt.Fprintf(stderr, "%s warning: %s\n", bin, w)
+					}
+				}
+				_ = os.MkdirAll(filepath.Dir(genOut), 0755)
+				if writeErr := os.WriteFile(genOut, []byte(content), 0644); writeErr != nil {
+					fmt.Fprintf(stderr, "%s error saving Containerfile: %v\n", bin, writeErr)
+					return 1
+				}
+				targetDockerfile = genOut
+			}
+		}
+
+		if targetDockerfile == "" {
+			fmt.Fprintf(stderr, "%s error: no Dockerfile or .devcontainer found in %s to build custom image\n", bin, contextDir)
+			return 1
+		}
+
+		customTag := fmt.Sprintf("fleet-custom-%s:latest", agentName)
+		fmt.Fprintf(stdout, "Building custom composed image %s using %s...\n", customTag, targetDockerfile)
+		buildCmd := runtime.CommandContext(ctx, "podman", "build", "-t", customTag, "-f", targetDockerfile, contextDir)
+		buildCmd.Stdout = stdout
+		buildCmd.Stderr = stderr
+		if err := buildCmd.Run(); err != nil {
+			fmt.Fprintf(stderr, "%s error: failed building custom composed image %s: %v\n", bin, customTag, err)
+			return 1
+		}
+		resolvedImage = customTag
+		image = customTag
+	} else if image == "" {
 		if isHostContainer {
 			image = "tool"
 		} else {
 			image = "base"
 		}
+		resolvedImage = image
 	}
 
-	resolvedImage := image
-	if !isNoContainer {
+	if !shouldBuildCustom && !isNoContainer {
 		var isLocal bool
 		resolvedImage, isLocal = runtime.ResolveAgentImage(ctx, image)
 		if resolvedImage == "" {
@@ -310,6 +378,9 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 		return 1
 	}
 
+	if engineType != "" && engineType != "fleet-agent" && engineType != "default" {
+		cfg.Harness = engineType
+	}
 	lowerHarness := strings.ToLower(strings.TrimSpace(image))
 	switch lowerHarness {
 	case "agy", "claude", "opencode", "pig":
@@ -1258,4 +1329,27 @@ func handleAgentRemote(ctx context.Context, paths config.Paths, args []string, s
 		return 1
 	}
 	return 0
+}
+
+func findLocalAgentDockerfile(dir string) (string, string) {
+	if dir == "" {
+		return "", ""
+	}
+	candidates := []string{
+		filepath.Join(dir, ".fleet", "Dockerfile"),
+		filepath.Join(dir, ".sndbx", "Dockerfile"),
+		filepath.Join(dir, ".devcontainer", "Containerfile.fleet"),
+		filepath.Join(dir, ".devcontainer", "Dockerfile"),
+		filepath.Join(dir, "Containerfile"),
+		filepath.Join(dir, "Dockerfile"),
+	}
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c, ""
+		}
+	}
+	if devPath, err := devcontainer.FindDevcontainerFile(dir); err == nil {
+		return "", devPath
+	}
+	return "", ""
 }

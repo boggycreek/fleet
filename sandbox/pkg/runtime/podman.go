@@ -127,9 +127,9 @@ func EgressContainerName(name string) string {
 	return fmt.Sprintf("fleet-agent-%s-egress", clean)
 }
 
-// ResolveAgentImage resolves an image input according to ADR 00029:
+// ResolveAgentImage resolves an image input according to ADR 00029 & ADR 00051:
 // 1. Well-known presets (base, opencode, claude, agy, egress)
-// 2. Local Podman store images (matching local tags or localhost/ prefix)
+// 2. Local Podman store images (matching local tags, localhost/ prefix, or custom fleet-* tags)
 // 3. Remote OCI image references
 func ResolveAgentImage(ctx context.Context, input string) (image string, isLocal bool) {
 	lower := strings.ToLower(strings.TrimSpace(input))
@@ -153,6 +153,22 @@ func ResolveAgentImage(ctx context.Context, input string) (image string, isLocal
 		candidates = append(candidates, "localhost/"+input)
 		if !strings.Contains(input, ":") {
 			candidates = append(candidates, "localhost/"+input+":latest")
+		}
+	}
+
+	// Check custom composed image conventions (fleet-custom-<name>, fleet-image-<name>, fleet-<name>)
+	if !strings.HasPrefix(input, "fleet-") {
+		prefixes := []string{"fleet-custom-", "fleet-image-", "fleet-"}
+		for _, pfx := range prefixes {
+			cand := pfx + input
+			candidates = append(candidates, cand)
+			if !strings.Contains(cand, ":") {
+				candidates = append(candidates, cand+":latest")
+			}
+			candidates = append(candidates, "localhost/"+cand)
+			if !strings.Contains(cand, ":") {
+				candidates = append(candidates, "localhost/"+cand+":latest")
+			}
 		}
 	}
 
