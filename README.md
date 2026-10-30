@@ -135,6 +135,7 @@ bp status set <message>                                  # Set 300s ephemeral pr
 
 Task-oriented guides and step-by-step workflows are available in `doc/how-to/`:
 
+- **[Operational How-To Guides](doc/how-to/README.md)**: Scenario-oriented guides for agent lifecycles, IDE connections, shared infrastructure, backplane messaging, and diagnostics.
 - **[Getting Started Quickstart](doc/how-to/getting-started.md)**: Zero-to-agent walkthrough from `./install.sh` to running your first autonomous agent.
 - **[Cross-Agent Communication Guide](doc/how-to/cross-agent-communication.md)**: Deep dive into Valkey Streams backplane messaging, Ed25519 signing, and `bp` commands.
 - **[IDE Remote Development Setup](doc/how-to/ide-integration.md)**: Step-by-step setup for VS Code, Cursor, and JetBrains Gateway using `fleet plugin` and SSH links.
