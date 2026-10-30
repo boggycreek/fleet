@@ -136,6 +136,10 @@ All code produced by Jules must undergo rigorous, adversarial peer review before
 
 ### C. Review Verdicts & Actions
 
+> [!IMPORTANT]
+> **Mandatory `@jules` Prefix for PR Comments**:
+> Jules monitors feedback addressed specifically to it. Every review comment, change request, rebase directive, or follow-up feedback posted on a Jules PR **must be prefixed with `@jules`** to trigger Jules' reactive notification and subsequent commit loop.
+
 - **GO (Approve & Merge)**:
   - All invariants satisfied, tests pass with $\ge 90.0\%$ coverage, `make check` clean, zero security/architectural defects.
   - Approve PR:
@@ -151,17 +155,18 @@ All code produced by Jules must undergo rigorous, adversarial peer review before
   - Can be amended locally, pushed directly, and merged once green.
 - **NO-GO (Changes Requested)**:
   - High or medium severity architectural, logical, or security defects.
-  - Submit structured review feedback using the standard format with an executive summary table and detailed findings inside `<details>` tags:
+  - Submit structured review feedback prefixed with `@jules` using the standard format with an executive summary table and detailed findings inside `<details>` tags:
     ```bash
-    gh pr review <pr-number> --request-changes -b "$(cat review-notes.md)"
+    gh pr comment <pr-number> -b "@jules Changes requested:
+    $(cat review-notes.md)"
     ```
 
 ### D. Structured Feedback Format
 
-When requesting changes on a PR or posting review findings, use a concise summary table followed by deep-dive `<details>` tags:
+When requesting changes on a PR or posting review findings, prefix the comment with `@jules`, followed by a concise summary table and deep-dive `<details>` tags:
 
 ```markdown
-## Adversarial Review: PR #<number>
+@jules ## Adversarial Review: PR #<number>
 
 **Assessment: [GO | CONDITIONAL GO | NO-GO]**
 
