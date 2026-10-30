@@ -728,6 +728,111 @@ func (c *Client) GetStatus(ctx context.Context, agentID string) (string, error) 
 	return val.AsString()
 }
 
+// SetSpecialty assigns an agent to an operator-attested domain specialty
+func (c *Client) SetSpecialty(ctx context.Context, specialty, agent string) error {
+	if err := ValidateSpecialtyName(specialty); err != nil {
+		return err
+	}
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	if agent == "" {
+		return errors.New("agent ID cannot be empty")
+	}
+	specKey := SpecialtyKey(specialty)
+	_, err := c.Exec(ctx, "SADD", specKey, agent)
+	return err
+}
+
+// RemoveSpecialty removes an agent from a domain specialty
+func (c *Client) RemoveSpecialty(ctx context.Context, specialty, agent string) error {
+	if err := ValidateSpecialtyName(specialty); err != nil {
+		return err
+	}
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	if agent == "" {
+		return errors.New("agent ID cannot be empty")
+	}
+	specKey := SpecialtyKey(specialty)
+	_, err := c.Exec(ctx, "SREM", specKey, agent)
+	return err
+}
+
+// GetSpecialtyAgents retrieves all agents assigned to a specific domain specialty
+func (c *Client) GetSpecialtyAgents(ctx context.Context, specialty string) ([]string, error) {
+	if err := ValidateSpecialtyName(specialty); err != nil {
+		return nil, err
+	}
+	specKey := SpecialtyKey(specialty)
+	val, err := c.Exec(ctx, "SMEMBERS", specKey)
+	if err != nil {
+		return nil, err
+	}
+	if val.IsNull {
+		return []string{}, nil
+	}
+	arr, err := val.AsArray()
+	if err != nil {
+		return []string{}, nil
+	}
+	res := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, err := item.AsString(); err == nil && s != "" {
+			res = append(res, s)
+		}
+	}
+	return res, nil
+}
+
+// GetAllSpecialties returns a map of all domain specialties to their assigned agents
+func (c *Client) GetAllSpecialties(ctx context.Context) (map[string][]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	var domains []string
+
+	cursor := "0"
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		val, err := c.Exec(ctx, "SCAN", cursor, "MATCH", "specialty:*", "COUNT", "100")
+		if err != nil {
+			return nil, err
+		}
+		arr, err := val.AsArray()
+		if err != nil || len(arr) < 2 {
+			break
+		}
+		cursor = arr[0].String()
+		if keysArray, err := arr[1].AsArray(); err == nil {
+			for _, k := range keysArray {
+				keyStr := k.String()
+				domain := strings.TrimPrefix(keyStr, "specialty:")
+				if domain != "" && !seen[domain] {
+					seen[domain] = true
+					domains = append(domains, domain)
+				}
+			}
+		}
+		if cursor == "0" || cursor == "" {
+			break
+		}
+	}
+
+	res := make(map[string][]string, len(domains))
+	for _, domain := range domains {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		agents, err := c.GetSpecialtyAgents(ctx, domain)
+		if err != nil {
+			return nil, err
+		}
+		res[domain] = agents
+	}
+	return res, nil
+}
+
 // SetFinger stores profile and role metadata for this agent
 func (c *Client) SetFinger(ctx context.Context, info map[string]string) error {
 	fingerKey := FingerKey(c.cfg.AgentID)

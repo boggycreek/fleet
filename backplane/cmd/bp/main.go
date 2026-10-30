@@ -161,6 +161,9 @@ func RunWithContext(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case "whoami":
 		return handleWhoami(cfg, stdout)
 
+	case "specialty":
+		return handleSpecialty(cmdCtx, cfg, cmdArgs, stdout, stderr)
+
 	case "say":
 		return handleSay(cmdCtx, cfg, cmdArgs, stdin, stdout, stderr)
 
@@ -296,6 +299,9 @@ Commands:
   liaison set <agent>              Appoint an agent as fleet liaison (operator only)
   interval [get]                   Show current backplane poll interval in seconds
   interval set <seconds>           Set shared poll interval in seconds (5-3600)
+  specialty list [name] [--json]   List domain specialties and assigned agents
+  specialty add <name> <agent>     Assign an agent to a domain specialty (operator only)
+  specialty remove <name> <agent>  Remove an agent from a domain specialty (operator only)
   state get [<key>]                Read field from shared synaptic state (ADR 00040)
   state set <key> <val>            Update field in shared synaptic state (ADR 00040)
   state show                       Display entire shared synaptic state JSON (ADR 00040)
@@ -815,6 +821,158 @@ func handleLiaison(ctx context.Context, cfg libbp.ClientConfig, args []string, s
 
 	fmt.Fprintln(stderr, "Usage: bp liaison <get|set <agent>>")
 	return 1
+}
+
+func handleSpecialty(ctx context.Context, cfg libbp.ClientConfig, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "Usage: bp specialty <list [name] [--json] | add <name> <agent> | remove <name> <agent>>")
+		return 1
+	}
+
+	sub := strings.ToLower(args[0])
+	subArgs := args[1:]
+
+	switch sub {
+	case "list":
+		return handleSpecialtyList(ctx, cfg, subArgs, stdout, stderr)
+	case "add":
+		return handleSpecialtyAdd(ctx, cfg, subArgs, stdout, stderr)
+	case "remove":
+		return handleSpecialtyRemove(ctx, cfg, subArgs, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "bp: unknown specialty subcommand %q (expected 'list', 'add', or 'remove')\n", sub)
+		return 1
+	}
+}
+
+func handleSpecialtyList(ctx context.Context, cfg libbp.ClientConfig, args []string, stdout, stderr io.Writer) int {
+	var jsonOutput bool
+	var remaining []string
+	for _, arg := range args {
+		if arg == "--json" || arg == "-json" {
+			jsonOutput = true
+		} else if strings.HasPrefix(arg, "-") && arg != "-" {
+			fmt.Fprintf(stderr, "specialty list: flag provided but not defined: %s\n", arg)
+			return 1
+		} else {
+			remaining = append(remaining, arg)
+		}
+	}
+
+	var specialtyName string
+	if len(remaining) > 0 {
+		specialtyName = remaining[0]
+	}
+
+	client, err := getClient(ctx, cfg, stderr)
+	if err != nil {
+		return 1
+	}
+	defer client.Close()
+
+	if specialtyName != "" {
+		agents, err := client.GetSpecialtyAgents(ctx, specialtyName)
+		if err != nil {
+			fmt.Fprintf(stderr, "bp error: %v\n", err)
+			return 1
+		}
+
+		if jsonOutput {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(agents)
+			return 0
+		}
+
+		if len(agents) == 0 {
+			fmt.Fprintf(stdout, "Specialty %q has no assigned agents.\n", specialtyName)
+			return 0
+		}
+
+		fmt.Fprintf(stdout, "Specialty %q assigned agents:\n", specialtyName)
+		for _, agent := range agents {
+			fmt.Fprintf(stdout, "  - %s\n", agent)
+		}
+		return 0
+	}
+
+	// List all specialties
+	specialties, err := client.GetAllSpecialties(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "bp error: %v\n", err)
+		return 1
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(specialties)
+		return 0
+	}
+
+	if len(specialties) == 0 {
+		fmt.Fprintln(stdout, "No domain specialties configured.")
+		return 0
+	}
+
+	printfFmt := "%-20s %s\n"
+	fmt.Fprintf(stdout, printfFmt, "SPECIALTY", "AGENTS")
+	for domain, agents := range specialties {
+		agentList := strings.Join(agents, ", ")
+		if agentList == "" {
+			agentList = "(none)"
+		}
+		fmt.Fprintf(stdout, printfFmt, domain, agentList)
+	}
+	return 0
+}
+
+func handleSpecialtyAdd(ctx context.Context, cfg libbp.ClientConfig, args []string, stdout, stderr io.Writer) int {
+	if len(args) < 2 {
+		fmt.Fprintln(stderr, "Usage: bp specialty add <name> <agent>")
+		return 1
+	}
+
+	specialty := args[0]
+	agent := args[1]
+
+	client, err := getClient(ctx, cfg, stderr)
+	if err != nil {
+		return 1
+	}
+	defer client.Close()
+
+	if err := client.SetSpecialty(ctx, specialty, agent); err != nil {
+		fmt.Fprintf(stderr, "bp error: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "Assigned agent %s to specialty %s\n", agent, specialty)
+	return 0
+}
+
+func handleSpecialtyRemove(ctx context.Context, cfg libbp.ClientConfig, args []string, stdout, stderr io.Writer) int {
+	if len(args) < 2 {
+		fmt.Fprintln(stderr, "Usage: bp specialty remove <name> <agent>")
+		return 1
+	}
+
+	specialty := args[0]
+	agent := args[1]
+
+	client, err := getClient(ctx, cfg, stderr)
+	if err != nil {
+		return 1
+	}
+	defer client.Close()
+
+	if err := client.RemoveSpecialty(ctx, specialty, agent); err != nil {
+		fmt.Fprintf(stderr, "bp error: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "Removed agent %s from specialty %s\n", agent, specialty)
+	return 0
 }
 
 func handleInterval(ctx context.Context, cfg libbp.ClientConfig, args []string, stdout, stderr io.Writer) int {
