@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Boggy Creek Software LLC
+//
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
@@ -18,7 +19,50 @@ import (
 	"testing"
 
 	"github.com/boggycreek/sandbox/pkg/config"
+	sndbxRuntime "github.com/boggycreek/sandbox/pkg/runtime"
 )
+
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	defer os.Exit(0)
+	args := os.Args
+	for len(args) > 0 {
+		if args[0] == "--" {
+			args = args[1:]
+			break
+		}
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		return
+	}
+	cmd, cmdArgs := args[0], args[1:]
+	switch cmd {
+	case "echo":
+		fmt.Println(strings.Join(cmdArgs, " "))
+	case "true":
+		os.Exit(0)
+	case "false":
+		os.Exit(1)
+	default:
+		os.Exit(127)
+	}
+}
+
+func helperCommand(ctx context.Context, cmd string, args ...string) *exec.Cmd {
+	cs := []string{"-test.run=TestHelperProcess", "--", cmd}
+	cs = append(cs, args...)
+	var execCmd *exec.Cmd
+	if ctx != nil {
+		execCmd = exec.CommandContext(ctx, os.Args[0], cs...)
+	} else {
+		execCmd = exec.Command(os.Args[0], cs...)
+	}
+	execCmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+	return execCmd
+}
 
 func TestGenerateGatewayPluginXML(t *testing.T) {
 	xml := GenerateGatewayPluginXML()
@@ -124,6 +168,9 @@ func TestGenerateToolboxPluginManifestAndJAR(t *testing.T) {
 }
 
 func TestFindJetBrainsPluginDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
 	dirs := FindJetBrainsPluginDirs()
 	_ = dirs
 
@@ -133,7 +180,6 @@ func TestFindJetBrainsPluginDirs(t *testing.T) {
 	_ = GetDefaultToolboxPluginDir()
 	_ = GetDefaultToolboxSSHSettingsPath()
 
-	tmpDir := t.TempDir()
 	// Create mock IDE directories
 	mockRoot := filepath.Join(tmpDir, "JetBrains")
 	_ = os.MkdirAll(filepath.Join(mockRoot, "JetBrainsGateway2024.1"), 0755)
@@ -454,7 +500,7 @@ func TestInstallAndRemoveVSCodePlugin(t *testing.T) {
 	defer func() { ExecCommandContext = origExec }()
 
 	ExecCommandContext = func(ctx context.Context, command string, args ...string) *exec.Cmd {
-		return exec.Command("true")
+		return helperCommand(ctx, "true")
 	}
 
 	res, err := InstallVSCodePlugin(ctx, paths, &out)
@@ -466,7 +512,7 @@ func TestInstallAndRemoveVSCodePlugin(t *testing.T) {
 	}
 
 	ExecCommandContext = func(ctx context.Context, command string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return helperCommand(ctx, "false")
 	}
 
 	res2, err := InstallVSCodePlugin(ctx, paths, &out)
@@ -488,6 +534,7 @@ func TestInstallAndRemoveVSCodePlugin(t *testing.T) {
 
 func TestListPlugins(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
 	paths := config.Paths{
 		DataHome:      filepath.Join(tmpDir, "data"),
 		AgentsDir:     filepath.Join(tmpDir, "data", "agents"),
@@ -816,5 +863,470 @@ Host legacy-host
 	soloAfter, _ := os.ReadFile(soloConfig)
 	if len(strings.TrimSpace(string(soloAfter))) != 0 {
 		t.Errorf("expected solo config to be empty after remove, got:\n%s", string(soloAfter))
+	}
+}
+
+func TestToolboxPathsAndDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	pluginDir := GetDefaultToolboxPluginDir()
+	if pluginDir == "" {
+		t.Errorf("expected non-empty toolbox plugin dir")
+	}
+	settingsPath := GetDefaultToolboxSSHSettingsPath()
+	if settingsPath == "" {
+		t.Errorf("expected non-empty toolbox settings path")
+	}
+
+	t.Setenv("HOME", "")
+	_ = GetDefaultToolboxPluginDir()
+	_ = GetDefaultToolboxSSHSettingsPath()
+}
+
+func TestSyncToolboxSSHSettings_AdvancedBranches(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := config.Paths{
+		DataHome:      tmpDir,
+		AgentsDir:     filepath.Join(tmpDir, "agents"),
+		SSHConfigFile: filepath.Join(tmpDir, "ssh_config"),
+	}
+	_ = paths.EnsureDirectories()
+
+	// 1. Empty settingsPath with no home
+	t.Setenv("HOME", "")
+	err := SyncToolboxSSHSettings(context.Background(), paths, "")
+	if err != nil {
+		t.Errorf("expected nil error on empty settings path, got: %v", err)
+	}
+
+	// 2. Non-existent toolbox plugins directory returns nil without error
+	nonExistent := filepath.Join(tmpDir, "does-not-exist", "ssh", "settings.json")
+	if err := SyncToolboxSSHSettings(context.Background(), paths, nonExistent); err != nil {
+		t.Errorf("expected nil on non-existent toolbox dir, got: %v", err)
+	}
+
+	// 3. Existing settings with existing fleet- and legacy sndbx- remotes
+	toolboxDir := filepath.Join(tmpDir, "Toolbox", "plugins")
+	sshDir := filepath.Join(toolboxDir, "ssh")
+	if err := os.MkdirAll(sshDir, 0755); err != nil {
+		t.Fatalf("failed creating ssh dir: %v", err)
+	}
+	settingsFile := filepath.Join(sshDir, "settings.json")
+
+	initialJSON := `{
+		"envsJson": "{\"remotes\":[{\"host\":\"fleet-old\"},{\"host\":\"sndbx-legacy\"},{\"host\":\"other-remote\"}]}",
+		"CONNECTION_STRINGS_CACHE": "{\"agent@fleet-old\":{},\"agent@sndbx-legacy\":{},\"user@other\":{}}",
+		"TBX_DEPLOYMENT_TARGET_ENVagent@fleet-old": "1",
+		"TBX_AUTO_CONNECT_ENVagent@sndbx-legacy": "false",
+		"otherKey": "preserved"
+	}`
+	if err := os.WriteFile(settingsFile, []byte(initialJSON), 0644); err != nil {
+		t.Fatalf("failed writing settings file: %v", err)
+	}
+
+	if err := SyncToolboxSSHSettings(context.Background(), paths, settingsFile); err != nil {
+		t.Fatalf("SyncToolboxSSHSettings failed: %v", err)
+	}
+
+	content, _ := os.ReadFile(settingsFile)
+	strContent := string(content)
+	if strings.Contains(strContent, "fleet-old") || strings.Contains(strContent, "sndbx-legacy") {
+		t.Errorf("expected old fleet and sndbx entries to be purged, got:\n%s", strContent)
+	}
+	if !strings.Contains(strContent, "other-remote") || !strings.Contains(strContent, "otherKey") {
+		t.Errorf("expected external entries to be preserved, got:\n%s", strContent)
+	}
+
+	// 4. RemoveToolboxSSHSettings on empty, non-existent, and populated settings
+	_ = RemoveToolboxSSHSettings("")
+	_ = RemoveToolboxSSHSettings(filepath.Join(tmpDir, "missing", "settings.json"))
+	if err := RemoveToolboxSSHSettings(settingsFile); err != nil {
+		t.Fatalf("RemoveToolboxSSHSettings failed: %v", err)
+	}
+
+	// 5. Corrupt JSON in RemoveToolboxSSHSettings returns nil without error
+	_ = os.WriteFile(settingsFile, []byte("invalid-json{"), 0644)
+	if err := RemoveToolboxSSHSettings(settingsFile); err != nil {
+		t.Errorf("expected nil on invalid JSON in RemoveToolboxSSHSettings, got: %v", err)
+	}
+}
+
+func TestGatewayPlugin_LegacyCleanupAndErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := config.Paths{
+		DataHome:      filepath.Join(tmpDir, "data"),
+		AgentsDir:     filepath.Join(tmpDir, "data", "agents"),
+		SSHConfigFile: filepath.Join(tmpDir, "data", "ssh_config"),
+	}
+	_ = paths.EnsureDirectories()
+
+	// Pre-create legacy sndbx-gateway directory to test migration/removal
+	legacyCentral := filepath.Join(paths.DataHome, "plugins", "jetbrains-gateway", "sndbx-gateway")
+	_ = os.MkdirAll(legacyCentral, 0755)
+	_ = os.WriteFile(filepath.Join(legacyCentral, "old.jar"), []byte("legacy"), 0644)
+
+	var out bytes.Buffer
+	res, err := InstallGatewayPlugin(context.Background(), paths, &out)
+	if err != nil {
+		t.Fatalf("InstallGatewayPlugin failed: %v", err)
+	}
+	if _, err := os.Stat(legacyCentral); !os.IsNotExist(err) {
+		t.Errorf("expected legacyCentral to be cleaned up on install")
+	}
+
+	// Recreate legacy directory to test cleanup on RemoveGatewayPlugin
+	_ = os.MkdirAll(legacyCentral, 0755)
+	remRes, err := RemoveGatewayPlugin(context.Background(), paths, &out)
+	if err != nil {
+		t.Fatalf("RemoveGatewayPlugin failed: %v", err)
+	}
+	hasLegacy := false
+	for _, p := range remRes.RemovedPaths {
+		if strings.Contains(p, "sndbx-gateway") {
+			hasLegacy = true
+			break
+		}
+	}
+	if !hasLegacy {
+		t.Errorf("expected legacyCentral to be included in removed paths")
+	}
+	_ = res
+}
+
+func TestNormalizeSSHPathAndHelpers(t *testing.T) {
+	if got := normalizeSSHPath(""); got != "" {
+		t.Errorf("expected empty string, got: %q", got)
+	}
+	home, _ := os.UserHomeDir()
+	if got := normalizeSSHPath("~"); got != home {
+		t.Errorf("expected home %q, got: %q", home, got)
+	}
+	if got := normalizeSSHPath("~/some/path"); got != filepath.Join(home, "some", "path") {
+		t.Errorf("expected ~/some/path, got: %q", got)
+	}
+	if got := normalizeSSHPath("$HOME/some/path"); got != filepath.Join(home, "some", "path") {
+		t.Errorf("expected $HOME/some/path, got: %q", got)
+	}
+	if got := normalizeSSHPath("/absolute/path"); got != "/absolute/path" {
+		t.Errorf("expected /absolute/path, got: %q", got)
+	}
+
+	// isTargetInclude edge cases
+	if isTargetInclude("", "/target") {
+		t.Errorf("empty line should not match")
+	}
+	if isTargetInclude("# comment", "/target") {
+		t.Errorf("comment line should not match")
+	}
+	if isTargetInclude("Include", "/target") {
+		t.Errorf("single word include should not match")
+	}
+	if isTargetInclude("other /target", "/target") {
+		t.Errorf("non-include command should not match")
+	}
+	if !isTargetInclude("Include \"/target\"", "/target") {
+		t.Errorf("quoted target should match")
+	}
+
+	roots := GetDefaultJetBrainsSearchRoots()
+	if len(roots) == 0 {
+		t.Errorf("expected search roots on linux/unix")
+	}
+}
+
+func TestEnsureSSHConfigManagedHosts_Branches(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := config.Paths{
+		DataHome:  tmpDir,
+		AgentsDir: filepath.Join(tmpDir, "agents"),
+	}
+	_ = paths.EnsureDirectories()
+
+	hostConfig := filepath.Join(tmpDir, "ssh_config")
+	// 1. Initial creation with legacy block
+	initial := "# --- BEGIN AGENT SANDBOX MANAGED HOSTS ---\nold\n# --- END AGENT SANDBOX MANAGED HOSTS ---\n"
+	_ = os.WriteFile(hostConfig, []byte(initial), 0600)
+
+	ctx := context.Background()
+	if err := EnsureSSHConfigManagedHosts(ctx, paths, hostConfig); err != nil {
+		t.Fatalf("EnsureSSHConfigManagedHosts failed: %v", err)
+	}
+
+	content, _ := os.ReadFile(hostConfig)
+	if !strings.Contains(string(content), ManagedSSHConfigHeader) {
+		t.Errorf("expected modern header to replace legacy block")
+	}
+
+	// 2. Second run replaces existing modern block
+	if err := EnsureSSHConfigManagedHosts(ctx, paths, hostConfig); err != nil {
+		t.Fatalf("second EnsureSSHConfigManagedHosts failed: %v", err)
+	}
+
+	// 3. RemoveSSHConfigManagedHosts
+	if err := RemoveSSHConfigManagedHosts(hostConfig); err != nil {
+		t.Fatalf("RemoveSSHConfigManagedHosts failed: %v", err)
+	}
+	contentAfterRemove, _ := os.ReadFile(hostConfig)
+	if strings.Contains(string(contentAfterRemove), ManagedSSHConfigHeader) {
+		t.Errorf("expected managed block to be removed")
+	}
+
+	// 4. Default hostSSHConfigFile with empty argument
+	t.Setenv("HOME", tmpDir)
+	_ = EnsureSSHConfigManagedHosts(ctx, paths, "")
+	_ = RemoveSSHConfigManagedHosts("")
+}
+
+func TestEnsureSSHConfigManagedHosts_WithAgentsAndPort(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := config.Paths{
+		DataHome:   tmpDir,
+		AgentsDir:  filepath.Join(tmpDir, "agents"),
+		SecretsDir: filepath.Join(tmpDir, "secrets"),
+	}
+	if err := paths.EnsureDirectories(); err != nil {
+		t.Fatalf("EnsureDirectories failed: %v", err)
+	}
+
+	cfg, err := config.NewAgentConfig("worker1", "base", "worker")
+	if err != nil {
+		t.Fatalf("NewAgentConfig failed: %v", err)
+	}
+	if err := config.SaveAgentConfig(cfg, paths); err != nil {
+		t.Fatalf("SaveAgentConfig failed: %v", err)
+	}
+
+	mockExec := sndbxRuntime.CommandExecutorFunc(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "podman" && len(args) >= 2 && args[0] == "port" {
+			return helperCommand(ctx, "echo", "0.0.0.0:42222")
+		}
+		return helperCommand(ctx, "false")
+	})
+	ctx := sndbxRuntime.WithCommandExecutor(context.Background(), mockExec)
+
+	hostConfig := filepath.Join(tmpDir, "ssh_config")
+	// Test file without trailing newline
+	if err := os.WriteFile(hostConfig, []byte("Host existing-host\n    User tester"), 0600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := EnsureSSHConfigManagedHosts(ctx, paths, hostConfig); err != nil {
+		t.Fatalf("EnsureSSHConfigManagedHosts failed: %v", err)
+	}
+
+	content, err := os.ReadFile(hostConfig)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	strContent := string(content)
+	if !strings.Contains(strContent, "worker1") || !strings.Contains(strContent, "42222") {
+		t.Errorf("expected worker1 and port 42222 in ssh config, got:\n%s", strContent)
+	}
+}
+
+func TestSyncToolboxSSHSettings_WithRunningAgents(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := config.Paths{
+		DataHome:   tmpDir,
+		AgentsDir:  filepath.Join(tmpDir, "agents"),
+		SecretsDir: filepath.Join(tmpDir, "secrets"),
+	}
+	if err := paths.EnsureDirectories(); err != nil {
+		t.Fatalf("EnsureDirectories failed: %v", err)
+	}
+
+	cfg, err := config.NewAgentConfig("bot1", "base", "worker")
+	if err != nil {
+		t.Fatalf("NewAgentConfig failed: %v", err)
+	}
+	if err := config.SaveAgentConfig(cfg, paths); err != nil {
+		t.Fatalf("SaveAgentConfig failed: %v", err)
+	}
+
+	mockExec := sndbxRuntime.CommandExecutorFunc(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "podman" && len(args) >= 2 && args[0] == "port" {
+			return helperCommand(ctx, "echo", "0.0.0.0:42222")
+		}
+		return helperCommand(ctx, "false")
+	})
+	ctx := sndbxRuntime.WithCommandExecutor(context.Background(), mockExec)
+
+	settingsDir := filepath.Join(tmpDir, "Toolbox", "plugins", "ssh")
+	if err := os.MkdirAll(settingsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	settingsPath := filepath.Join(settingsDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte("{}"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := SyncToolboxSSHSettings(ctx, paths, settingsPath); err != nil {
+		t.Fatalf("SyncToolboxSSHSettings failed: %v", err)
+	}
+
+	content, _ := os.ReadFile(settingsPath)
+	strContent := string(content)
+	if !strings.Contains(strContent, "fleet-bot1") || !strings.Contains(strContent, "TBX_DEPLOYMENT_TARGET_ENVagent@fleet-bot1") {
+		t.Errorf("expected running agent bot1 in toolbox settings, got:\n%s", strContent)
+	}
+}
+
+func TestRemoveToolboxSSHSettings_TargetedRemovals(t *testing.T) {
+	tmpDir := t.TempDir()
+	settingsPath := filepath.Join(tmpDir, "settings.json")
+	initialJSON := `{
+		"envsJson": "{\"remotes\":[{\"host\":\"fleet-alpha\"},{\"host\":\"sndbx-beta\"},{\"host\":\"keep-me\"}]}",
+		"CONNECTION_STRINGS_CACHE": "{\"agent@fleet-alpha\":{},\"agent@sndbx-beta\":{},\"agent@keep-me\":{}}",
+		"TBX_DEPLOYMENT_TARGET_ENVagent@fleet-alpha": "1",
+		"TBX_DEPLOYMENT_TARGET_ENVagent@sndbx-beta": "1",
+		"TBX_AUTO_CONNECT_ENVagent@fleet-alpha": "false",
+		"TBX_AUTO_CONNECT_ENVagent@sndbx-beta": "false",
+		"otherKey": "preserved"
+	}`
+	if err := os.WriteFile(settingsPath, []byte(initialJSON), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := RemoveToolboxSSHSettings(settingsPath); err != nil {
+		t.Fatalf("RemoveToolboxSSHSettings failed: %v", err)
+	}
+
+	content, _ := os.ReadFile(settingsPath)
+	strContent := string(content)
+	if strings.Contains(strContent, "fleet-alpha") || strings.Contains(strContent, "sndbx-beta") {
+		t.Errorf("expected fleet and sndbx entries to be removed, got:\n%s", strContent)
+	}
+	if !strings.Contains(strContent, "keep-me") || !strings.Contains(strContent, "otherKey") {
+		t.Errorf("expected keep-me and otherKey to be preserved, got:\n%s", strContent)
+	}
+}
+
+func TestRemoveGatewayAndToolbox_DiscoveredAndLegacy(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	jbDir := filepath.Join(tmpHome, ".local", "share", "JetBrains", "JetBrainsGateway2024.1")
+	if err := os.MkdirAll(filepath.Join(jbDir, "sndbx-gateway"), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(jbDir, "fleet-gateway", "lib"), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	jarFile := filepath.Join(jbDir, "fleet-gateway", "lib", "fleet-gateway.jar")
+	if err := os.WriteFile(jarFile, []byte("jar"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	paths := config.Paths{
+		DataHome:      filepath.Join(tmpHome, "data"),
+		SSHConfigFile: filepath.Join(tmpHome, "data", "ssh_config"),
+	}
+	if err := paths.EnsureDirectories(); err != nil {
+		t.Fatalf("EnsureDirectories failed: %v", err)
+	}
+
+	legacyToolboxDir := filepath.Join(paths.DataHome, "plugins", "jetbrains-toolbox", "sndbx")
+	if err := os.MkdirAll(legacyToolboxDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	activeToolboxDir := filepath.Join(tmpHome, ".local", "share", "JetBrains", "Toolbox", "plugins", "fleet")
+	if err := os.MkdirAll(activeToolboxDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	// 1. ListPlugins sees the discovered jar and active toolbox dir
+	plugins := ListPlugins(paths)
+	var gwFound, tbFound bool
+	for _, p := range plugins {
+		if p.ID == PluginIDGateway && p.Installed {
+			gwFound = true
+		}
+		if p.ID == PluginIDToolbox && p.Installed {
+			tbFound = true
+		}
+	}
+	if !gwFound {
+		t.Errorf("expected ListPlugins to find installed gateway plugin at %s", jarFile)
+	}
+	if !tbFound {
+		t.Errorf("expected ListPlugins to find installed toolbox plugin at %s", activeToolboxDir)
+	}
+
+	// 2. RemoveGatewayPlugin cleans up discovered legacy dir
+	var buf bytes.Buffer
+	remGW, err := RemoveGatewayPlugin(context.Background(), paths, &buf)
+	if err != nil {
+		t.Fatalf("RemoveGatewayPlugin failed: %v", err)
+	}
+	foundLegacyGW := false
+	for _, p := range remGW.RemovedPaths {
+		if strings.Contains(p, "sndbx-gateway") {
+			foundLegacyGW = true
+		}
+	}
+	if !foundLegacyGW {
+		t.Errorf("expected legacy sndbx-gateway in discovered IDE to be removed")
+	}
+
+	// 3. RemoveToolboxPlugin cleans up legacy central dir
+	remTB, err := RemoveToolboxPlugin(context.Background(), paths, &buf)
+	if err != nil {
+		t.Fatalf("RemoveToolboxPlugin failed: %v", err)
+	}
+	foundLegacyTB := false
+	for _, p := range remTB.RemovedPaths {
+		if strings.Contains(p, "sndbx") {
+			foundLegacyTB = true
+		}
+	}
+	if !foundLegacyTB {
+		t.Errorf("expected legacy central toolbox directory to be removed")
+	}
+}
+
+func TestWriteSSHConfigFileAtomic_EdgeCases(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Directory creation failure
+	if err := writeSSHConfigFileAtomic("/dev/null/forbidden/config", []byte("data"), 0600); err == nil {
+		t.Errorf("expected error when writing to impossible directory")
+	}
+
+	// 2. Initial write without backup, followed by second write creating backup
+	target := filepath.Join(tmpDir, "ssh_config")
+	if err := writeSSHConfigFileAtomic(target, []byte("version1"), 0); err != nil {
+		t.Fatalf("first writeSSHConfigFileAtomic failed: %v", err)
+	}
+	if err := writeSSHConfigFileAtomic(target, []byte("version2"), 0600); err != nil {
+		t.Fatalf("second writeSSHConfigFileAtomic failed: %v", err)
+	}
+
+	bak := target + ".bak"
+	bakContent, err := os.ReadFile(bak)
+	if err != nil || string(bakContent) != "version1" {
+		t.Errorf("expected backup file with version1, got err=%v, content=%q", err, string(bakContent))
+	}
+
+	// 3. Rename failure when target is a non-empty directory
+	dirTarget := filepath.Join(tmpDir, "dir_as_target")
+	if err := os.MkdirAll(filepath.Join(dirTarget, "subfile"), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := writeSSHConfigFileAtomic(dirTarget, []byte("version3"), 0600); err == nil {
+		t.Errorf("expected error when target is a non-empty directory")
+	}
+}
+
+func TestEnsureAndRemoveSSHConfigInclude_Errors(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Reading error when hostSSHConfigFile is a directory
+	if _, err := EnsureSSHConfigInclude("/target", tmpDir); err == nil {
+		t.Errorf("expected EnsureSSHConfigInclude to fail when hostSSHConfigFile is a directory")
+	}
+	if _, err := RemoveSSHConfigInclude("/target", tmpDir); err == nil {
+		t.Errorf("expected RemoveSSHConfigInclude to fail when hostSSHConfigFile is a directory")
 	}
 }

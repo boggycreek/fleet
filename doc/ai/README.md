@@ -15,6 +15,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[Thinking Machines Inkling Evaluation](thinking-machines-inkling-evaluation.md)** (`fleet-inkling-evaluation`): Architectural evaluation of Thinking Machines Inkling (975B/41B MoE) with controllable reasoning budget and Colibri NVMe streaming.
 - **[Liquid Foundation Models Evaluation](liquid-ai-lfm-evaluation.md)** (`fleet-lfm-evaluation`): Architecture, serving engine compatibility, agentic tool calling, and local gateway recommendations for Liquid AI LFMs.
 - **[Colibri MoE Inference Evaluation](colibri-moe-inference.md)** (`fleet-colibri-evaluation`): Architectural evaluation of Colibri for NVMe-streamed frontier MoE inference on Fleet developer workstations.
+- **[Adversarial Review & Critic Protocol](adversarial-review.md)** (`fleet-adversarial-review`): Dual-agent adversarial review, hypothesis generation, and critic verification to eliminate hallucinations.
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.

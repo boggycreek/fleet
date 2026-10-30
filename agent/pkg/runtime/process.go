@@ -14,12 +14,15 @@ import (
 	"syscall"
 )
 
+const maxReapedExits = 1024
+
 var (
 	managedPidsMu sync.RWMutex
 	managedPids   = make(map[int]bool)
 
-	reapedExitsMu sync.Mutex
-	reapedExits   = make(map[int]int)
+	reapedExitsMu   sync.Mutex
+	reapedExits     = make(map[int]int)
+	reapedExitsRing = make([]int, 0, maxReapedExits)
 )
 
 // RegisterChildPID registers an active child process PID spawned by os/exec.
@@ -43,6 +46,12 @@ func UnregisterChildPID(pid int) {
 
 	reapedExitsMu.Lock()
 	delete(reapedExits, pid)
+	for i, p := range reapedExitsRing {
+		if p == pid {
+			reapedExitsRing = append(reapedExitsRing[:i], reapedExitsRing[i+1:]...)
+			break
+		}
+	}
 	reapedExitsMu.Unlock()
 }
 
@@ -54,9 +63,22 @@ func IsManagedChildPID(pid int) bool {
 }
 
 // RecordReapedExit records the exit code of a child reaped by the zombie reaper.
+// It records exits unconditionally in a bounded ring buffer map so fast-exiting
+// children reaped by PID 1 retain their exit status before RegisterChildPID completes.
 func RecordReapedExit(pid int, exitCode int) {
+	if pid <= 0 {
+		return
+	}
 	reapedExitsMu.Lock()
 	defer reapedExitsMu.Unlock()
+	if _, exists := reapedExits[pid]; !exists {
+		if len(reapedExitsRing) >= maxReapedExits {
+			oldest := reapedExitsRing[0]
+			reapedExitsRing = reapedExitsRing[1:]
+			delete(reapedExits, oldest)
+		}
+		reapedExitsRing = append(reapedExitsRing, pid)
+	}
 	reapedExits[pid] = exitCode
 }
 
@@ -67,6 +89,12 @@ func PopReapedExit(pid int) (int, bool) {
 	code, ok := reapedExits[pid]
 	if ok {
 		delete(reapedExits, pid)
+		for i, p := range reapedExitsRing {
+			if p == pid {
+				reapedExitsRing = append(reapedExitsRing[:i], reapedExitsRing[i+1:]...)
+				break
+			}
+		}
 	}
 	return code, ok
 }

@@ -142,5 +142,7 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
 ### Compliance, Licensing & Governance (`THEME-GOVERNANCE`)
 - **[00030 — Open Source Attribution and Third-Party Licensing Notices](00030-OpenSourceAttributionAndThirdPartyLicensingNotices.md)**  
   *Executive Summary:* Establishes a clear boundary between human-centric open-source recognition (`ACKNOWLEDGEMENTS.md`) and formal legal license texts (`NOTICES.md`). Reinforces our zero-dependency standard library Go architecture while systematically preserving third-party copyright notices and disclaimers for all container runtime, infrastructure, and session tooling components.
+- **[00052 — Zero-Leakage OpenRouter Inference Gateway Proxy](00052-ZeroLeakageOpenRouterInferenceProxy.md)**  
+  *Executive Summary:* Establishes a dedicated, unprivileged reverse proxy container (`fleet-openrouter`) on the shared infrastructure bridge network that holds the master OpenRouter API key and injects authorization headers on-the-fly, allowing autonomous agent containers to query cloud frontier models without exposing raw access tokens to untrusted agent environments.
 
 

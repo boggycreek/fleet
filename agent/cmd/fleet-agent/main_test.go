@@ -10,18 +10,120 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/boggycreek/sandbox/agent/pkg/engine"
 	"github.com/boggycreek/sandbox/agent/pkg/runtime"
+	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
+	"github.com/boggycreek/sandbox/backplane/pkg/libbp/resp"
 )
+
+type syncWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *syncWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func waitForLog(w *syncWriter, substr string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if strings.Contains(w.String(), substr) {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return strings.Contains(w.String(), substr)
+}
+
+func startDummyValkey(t *testing.T) (string, func()) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on test port: %v", err)
+	}
+
+	done := make(chan struct{})
+	var connsMu sync.Mutex
+	var conns []net.Conn
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			connsMu.Lock()
+			conns = append(conns, conn)
+			connsMu.Unlock()
+
+			go func(c net.Conn) {
+				defer c.Close()
+				reader := resp.NewReader(c)
+				for {
+					val, err := reader.ReadValue()
+					if err != nil {
+						return
+					}
+					arr, err := val.AsArray()
+					if err != nil || len(arr) == 0 {
+						_, _ = c.Write([]byte("+OK\r\n"))
+						continue
+					}
+					cmd := strings.ToUpper(arr[0].Str)
+					switch cmd {
+					case "SCAN":
+						_, _ = c.Write([]byte("*2\r\n$1\r\n0\r\n*0\r\n"))
+					case "XREAD":
+						select {
+						case <-done:
+							return
+						case <-time.After(20 * time.Millisecond):
+						}
+						_, _ = c.Write([]byte("*-1\r\n"))
+					case "INCR":
+						_, _ = c.Write([]byte(":1\r\n"))
+					case "XADD":
+						_, _ = c.Write([]byte("$15\r\n1700000000000-0\r\n"))
+					default:
+						_, _ = c.Write([]byte("+OK\r\n"))
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	cleanup := func() {
+		close(done)
+		_ = l.Close()
+		connsMu.Lock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+		connsMu.Unlock()
+	}
+	return l.Addr().String(), cleanup
+}
 
 func TestLoadConfigDefaults(t *testing.T) {
 	cfg, err := LoadConfig([]string{})
@@ -98,6 +200,43 @@ func TestLoadConfigFlagsAndEnv(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_BackplaneEnv(t *testing.T) {
+	t.Run("bp_host default port and bp_password", func(t *testing.T) {
+		t.Setenv("VALKEY_ADDR", "")
+		t.Setenv("VALKEY_PASSWORD", "")
+		t.Setenv("BP_HOST", "valkey.example.internal")
+		t.Setenv("BP_PORT", "")
+		t.Setenv("BP_PASSWORD", "bp-secret")
+
+		cfg, err := LoadConfig(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.ValkeyAddr != "valkey.example.internal:6379" {
+			t.Errorf("expected valkey.example.internal:6379, got: %s", cfg.ValkeyAddr)
+		}
+		if cfg.ValkeyPassword != "bp-secret" {
+			t.Errorf("expected bp-secret, got: %s", cfg.ValkeyPassword)
+		}
+	})
+
+	t.Run("bp_host custom port", func(t *testing.T) {
+		t.Setenv("VALKEY_ADDR", "")
+		t.Setenv("VALKEY_PASSWORD", "")
+		t.Setenv("BP_HOST", "valkey.example.internal")
+		t.Setenv("BP_PORT", "6380")
+		t.Setenv("BP_PASSWORD", "")
+
+		cfg, err := LoadConfig(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.ValkeyAddr != "valkey.example.internal:6380" {
+			t.Errorf("expected valkey.example.internal:6380, got: %s", cfg.ValkeyAddr)
+		}
+	})
+}
+
 func TestLoggerOutput(t *testing.T) {
 	// 1. NDJSON logger
 	var jsonBuf bytes.Buffer
@@ -130,29 +269,61 @@ func TestLoggerOutput(t *testing.T) {
 }
 
 func TestStartZombieReaper(t *testing.T) {
-	// 1. By default when not PID 1, StartZombieReaper exits immediately
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Run("not PID 1 without force", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	var logBuf bytes.Buffer
-	logger := NewLogger(&logBuf, "ndjson")
+		var logBuf bytes.Buffer
+		logger := NewLogger(&logBuf, "ndjson")
+		StartZombieReaper(ctx, logger)
+	})
 
-	StartZombieReaper(ctx, logger)
+	t.Run("forced mode reaps managed and unmanaged", func(t *testing.T) {
+		t.Setenv("FORCE_ZOMBIE_REAPER", "1")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	// 2. Forced mode activates the reaper
-	t.Setenv("FORCE_ZOMBIE_REAPER", "1")
-	StartZombieReaper(ctx, logger)
+		writer := &syncWriter{}
+		reaperLogger := NewLogger(writer, "ndjson")
+		StartZombieReaper(ctx, reaperLogger)
 
-	cmd := exec.Command("true")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start true command: %v", err)
-	}
-	runtime.RegisterChildPID(cmd.Process.Pid)
-	defer runtime.UnregisterChildPID(cmd.Process.Pid)
+		cmd := exec.Command("true")
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("failed to start true command: %v", err)
+		}
+		runtime.RegisterChildPID(cmd.Process.Pid)
+		defer runtime.UnregisterChildPID(cmd.Process.Pid)
 
-	if err := runtime.WaitManagedCmd(cmd); err != nil {
-		t.Fatalf("expected clean exit from WaitManagedCmd: %v", err)
-	}
+		if !waitForLog(writer, `"managed":true`, 3*time.Second) {
+			t.Fatal("timed out waiting for reaper to reap managed process")
+		}
+
+		if err := runtime.WaitManagedCmd(cmd); err != nil {
+			t.Fatalf("expected clean exit from WaitManagedCmd: %v", err)
+		}
+
+		cmdUnmanaged := exec.Command("true")
+		if err := cmdUnmanaged.Start(); err != nil {
+			t.Fatalf("failed to start unmanaged cmd: %v", err)
+		}
+
+		if !waitForLog(writer, `"managed":false`, 3*time.Second) {
+			t.Fatal("timed out waiting for reaper to reap unmanaged process")
+		}
+	})
+
+	t.Run("nil logger does not panic", func(t *testing.T) {
+		t.Setenv("FORCE_ZOMBIE_REAPER", "1")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		StartZombieReaper(ctx, nil)
+		cmd := exec.Command("true")
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("failed to start command: %v", err)
+		}
+		_ = cmd.Wait()
+	})
 }
 
 func TestRunCleanShutdown(t *testing.T) {
@@ -187,31 +358,219 @@ func TestRunCleanShutdown(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	var outBuf bytes.Buffer
+	writer := &syncWriter{}
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- Run(ctx, cfg, &outBuf)
+		errChan <- Run(ctx, cfg, writer)
 	}()
 
-	// Allow workers to start
-	time.Sleep(50 * time.Millisecond)
-
-	// Trigger shutdown
+	if !waitForLog(writer, "Starting supervisor workers", 3*time.Second) {
+		t.Fatal("timed out waiting for supervisor workers to start")
+	}
 	cancel()
 
 	select {
 	case err := <-errChan:
 		if err != nil {
-			t.Errorf("unexpected error on clean shutdown: %v", err)
+			t.Fatalf("unexpected error on clean shutdown: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not exit within timeout")
 	}
 
-	out := outBuf.String()
+	out := writer.String()
 	if !strings.Contains(out, "Starting fleet-agent runtime") || !strings.Contains(out, "shut down cleanly") {
 		t.Errorf("expected startup and shutdown logs, got:\n%s", out)
+	}
+}
+
+func TestRun_ValkeyGateway(t *testing.T) {
+	addr, cleanup := startDummyValkey(t)
+	defer cleanup()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := engine.ChatCompletionResponse{
+			ID: "resp-vg",
+			Choices: []engine.ChatChoice{
+				{
+					Message: engine.ChatMessage{Role: "assistant", Content: "Ready."},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	tmpDir := t.TempDir()
+	cfg := &Config{
+		AgentName:     "valkey-agent",
+		AgentRole:     "Tester",
+		WorkspaceDir:  tmpDir,
+		StateFile:     filepath.Join(tmpDir, "state.json"),
+		OpenAIBaseURL: ts.URL,
+		OpenAIModel:   "test-model",
+		ValkeyAddr:    addr,
+		LogFormat:     "ndjson",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	writer := &syncWriter{}
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- Run(ctx, cfg, writer)
+	}()
+
+	if !waitForLog(writer, "Configured Valkey gateway subsystem with verified signatures", 3*time.Second) {
+		t.Fatal("timed out waiting for Valkey gateway subsystem configuration")
+	}
+	cancel()
+
+	select {
+	case err := <-errChan:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not exit within timeout")
+	}
+
+	if !strings.Contains(writer.String(), "Configured Valkey gateway subsystem with verified signatures") {
+		t.Errorf("expected gateway configured log, got: %s", writer.String())
+	}
+}
+
+func TestRun_MCPFailureModes(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Script that exits with error on initialize
+	failInitScript := filepath.Join(tmpDir, "fail-init.sh")
+	if err := os.WriteFile(failInitScript, []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatalf("failed to write failInitScript: %v", err)
+	}
+
+	// 2. Script that initializes but fails tool discovery
+	failDiscScript := filepath.Join(tmpDir, "fail-disc.sh")
+	discContent := `#!/bin/sh
+while read -r line; do
+  case "$line" in
+    *initialize*)
+      echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"mock","version":"1.0"}}}'
+      ;;
+    *tools/list*)
+      echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"discovery failed"}}'
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(failDiscScript, []byte(discContent), 0755); err != nil {
+		t.Fatalf("failed to write failDiscScript: %v", err)
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := engine.ChatCompletionResponse{
+			ID: "resp-mcp",
+			Choices: []engine.ChatChoice{
+				{Message: engine.ChatMessage{Role: "assistant", Content: "Ready."}},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	writer := &syncWriter{}
+	cfg := &Config{
+		AgentName:     "mcp-failure-agent",
+		AgentRole:     "Tester",
+		WorkspaceDir:  tmpDir,
+		StateFile:     filepath.Join(tmpDir, "state.json"),
+		OpenAIBaseURL: ts.URL,
+		OpenAIModel:   "test-model",
+		MCPBinaries:   []string{failInitScript, failDiscScript},
+		LogFormat:     "ndjson",
+	}
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- Run(ctx, cfg, writer)
+	}()
+
+	if !waitForLog(writer, "Starting supervisor workers", 3*time.Second) {
+		t.Fatal("timed out waiting for supervisor workers")
+	}
+	cancel()
+
+	select {
+	case err := <-errChan:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not exit within timeout")
+	}
+
+	logs := writer.String()
+	if !strings.Contains(logs, "Failed to initialize MCP client") {
+		t.Errorf("expected Failed to initialize MCP client log, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "Failed to discover MCP tools") {
+		t.Errorf("expected Failed to discover MCP tools log, got:\n%s", logs)
+	}
+}
+
+func TestRun_ValkeyAddrWithoutPort(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := engine.ChatCompletionResponse{
+			ID: "resp-nop",
+			Choices: []engine.ChatChoice{
+				{Message: engine.ChatMessage{Role: "assistant", Content: "Ready."}},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	writer := &syncWriter{}
+	cfg := &Config{
+		AgentName:     "valkey-noport",
+		AgentRole:     "Tester",
+		WorkspaceDir:  tmpDir,
+		StateFile:     filepath.Join(tmpDir, "state.json"),
+		OpenAIBaseURL: ts.URL,
+		OpenAIModel:   "test-model",
+		ValkeyAddr:    "192.0.2.1", // Unreachable IP from RFC 5737 without port!
+		LogFormat:     "ndjson",
+	}
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- Run(ctx, cfg, writer)
+	}()
+
+	_ = waitForLog(writer, "Failed to connect to Valkey", 500*time.Millisecond)
+
+	select {
+	case err := <-errChan:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Run did not exit within timeout")
+	}
+
+	if !strings.Contains(writer.String(), "Failed to connect to Valkey") {
+		t.Errorf("expected Valkey dial failure log, got:\n%s", writer.String())
 	}
 }
 
@@ -265,12 +624,9 @@ done
 	defer ts.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	var outBuf bytes.Buffer
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
+	defer cancel()
 
+	writer := &syncWriter{}
 	args := []string{
 		"--name", "test-agent-mcp",
 		"--workspace", tmpDir,
@@ -279,12 +635,26 @@ done
 		"--valkey-addr", "127.0.0.1:1", // unreachable port to exercise dial error path
 	}
 
-	err = runMain(ctx, args, &outBuf)
-	if err != nil {
-		t.Errorf("unexpected error running runMain with mock MCP: %v", err)
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- runMain(ctx, args, writer)
+	}()
+
+	if !waitForLog(writer, "Starting supervisor workers", 3*time.Second) {
+		t.Fatal("timed out waiting for supervisor workers")
+	}
+	cancel()
+
+	select {
+	case err := <-errChan:
+		if err != nil {
+			t.Fatalf("unexpected error running runMain with mock MCP: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("runMain did not exit within timeout")
 	}
 
-	logs := outBuf.String()
+	logs := writer.String()
 	if !strings.Contains(logs, "Registered MCP tools") {
 		t.Errorf("expected mock MCP registration log, got:\n%s", logs)
 	}
@@ -293,39 +663,49 @@ done
 	}
 }
 
-func TestMainInvocation(t *testing.T) {
-	origArgs := os.Args
-	origExit := osExit
-	defer func() {
-		os.Args = origArgs
-		osExit = origExit
-	}()
-
-	exitCalled := false
-	var exitCode int
-	osExit = func(code int) {
-		exitCalled = true
-		exitCode = code
-	}
-
-	os.Args = []string{"fleet-agent", "--unrecognized-flag-xyz"}
-	main()
-
-	if !exitCalled || exitCode != 1 {
-		t.Errorf("expected osExit(1) called, got called=%v code=%d", exitCalled, exitCode)
+func TestRunMain_Help(t *testing.T) {
+	var buf bytes.Buffer
+	err := runMain(context.Background(), []string{"--help"}, &buf)
+	if err != nil {
+		t.Fatalf("expected nil error on --help, got: %v", err)
 	}
 }
 
 func TestBackplaneResponder(t *testing.T) {
-	var nilResp *backplaneResponder
-	if err := nilResp.SendReply(context.Background(), "alice", "hello"); err != nil {
-		t.Errorf("expected nil error on nil responder, got: %v", err)
-	}
-	resp := &backplaneResponder{client: nil}
-	if err := resp.SendReply(context.Background(), "", "hello"); err != nil {
-		t.Errorf("expected nil error on empty recipient, got: %v", err)
-	}
-	if err := resp.SendReply(context.Background(), "alice", ""); err != nil {
-		t.Errorf("expected nil error on empty content, got: %v", err)
-	}
+	t.Run("nil receiver and empty parameters", func(t *testing.T) {
+		var nilResp *backplaneResponder
+		if err := nilResp.SendReply(context.Background(), "alice", "hello"); err != nil {
+			t.Errorf("expected nil error on nil responder, got: %v", err)
+		}
+		resp := &backplaneResponder{client: nil}
+		if err := resp.SendReply(context.Background(), "", "hello"); err != nil {
+			t.Errorf("expected nil error on empty recipient, got: %v", err)
+		}
+		if err := resp.SendReply(context.Background(), "alice", ""); err != nil {
+			t.Errorf("expected nil error on empty content, got: %v", err)
+		}
+	})
+
+	t.Run("successful reply with active client", func(t *testing.T) {
+		addr, cleanup := startDummyValkey(t)
+		defer cleanup()
+
+		host, portStr, _ := net.SplitHostPort(addr)
+		port, _ := strconv.Atoi(portStr)
+
+		bpClient, err := libbp.Dial(context.Background(), libbp.ClientConfig{
+			Host:    host,
+			Port:    port,
+			AgentID: "test-sender",
+		})
+		if err != nil {
+			t.Fatalf("failed to dial dummy valkey: %v", err)
+		}
+		defer bpClient.Close()
+
+		resp := &backplaneResponder{client: bpClient}
+		if err := resp.SendReply(context.Background(), "alice", "hello from backplane"); err != nil {
+			t.Fatalf("expected nil error on SendReply, got: %v", err)
+		}
+	})
 }
