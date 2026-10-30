@@ -130,6 +130,8 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Resolves host-bound local LLM inference engines (Ollama, llama.cpp, vLLM, LiteLLM) from unprivileged rootless containers via Podman host-gateway resolution (`--add-host=llm-gateway:host-gateway`) and automatic configuration URL translation.
 - **[00037 — Dynamic Piglet Synthesis from Hardware Probes](00037-DynamicPigletSynthesisFromHardwareProbes.md)**  
   *Executive Summary:* Automates the generation of specialized PiG "Piglet" YAML profiles based on dynamic host GPU and inference engine probes, tuning context windows, thinking levels, tool allowlists, and system prompts to physical workstation hardware.
+- **[00055 — 128k KV Cache Scaling for Local LLM Inference](00055-128kKvCacheScalingForLocalInference.md)**
+  *Executive Summary:* Evaluates expanding local host-bridged LLM inference KV cache from 64k to 128k tokens across 4x32k and 2x64k topologies for Spark-X2.5-4B (Q4_K_M weights, Q8_0 KV cache) on 12GB VRAM GPUs, establishing VRAM budget stability at ~6.4 GB with >5.5 GB headroom and analyzing prefix-caching throughput trade-offs.
 - **[00038 — Specialized Fleet Bug Probing Ensemble](00038-SpecializedFleetBugProbingEnsemble.md)**  
   *Executive Summary:* Establishes a three-tier collaborative agent topology (Fuzzer, Auditor, Verifier) inside isolated sandbox containers, coordinating via the Valkey backplane (`bp`) and tracking findings in local Gitea (`bd`).
 
