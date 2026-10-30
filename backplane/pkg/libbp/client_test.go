@@ -27,7 +27,6 @@ type mockValkeyServer struct {
 	hashes   map[string]map[string]string
 	sets     map[string]map[string]bool
 	streams  map[string][]map[string]string
-	sets     map[string]map[string]struct{}
 	seqs     map[string]int64
 	closed   bool
 	authFail bool
@@ -46,7 +45,6 @@ func startMockValkeyServer(t *testing.T) (*mockValkeyServer, int) {
 		hashes:   make(map[string]map[string]string),
 		sets:     make(map[string]map[string]bool),
 		streams:  make(map[string][]map[string]string),
-		sets:     make(map[string]map[string]struct{}),
 		seqs:     make(map[string]int64),
 		t:        t,
 	}
@@ -260,45 +258,6 @@ func (s *mockValkeyServer) handleConn(conn net.Conn) {
 					{Type: resp.TypeArray, Array: keysArr},
 				},
 			})
-
-		case "SADD":
-			key := args[1].String()
-			if s.sets[key] == nil {
-				s.sets[key] = make(map[string]struct{})
-			}
-			var added int64
-			for i := 2; i < len(args); i++ {
-				m := args[i].String()
-				if _, exists := s.sets[key][m]; !exists {
-					s.sets[key][m] = struct{}{}
-					added++
-				}
-			}
-			_ = w.WriteValue(resp.Value{Type: resp.TypeInteger, Num: added})
-
-		case "SREM":
-			key := args[1].String()
-			var rem int64
-			if s.sets[key] != nil {
-				for i := 2; i < len(args); i++ {
-					m := args[i].String()
-					if _, exists := s.sets[key][m]; exists {
-						delete(s.sets[key], m)
-						rem++
-					}
-				}
-			}
-			_ = w.WriteValue(resp.Value{Type: resp.TypeInteger, Num: rem})
-
-		case "SMEMBERS":
-			key := args[1].String()
-			var arr []resp.Value
-			if s.sets[key] != nil {
-				for m := range s.sets[key] {
-					arr = append(arr, resp.Value{Type: resp.TypeBulkString, Str: m})
-				}
-			}
-			_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: arr})
 
 		case "XREAD":
 			// Minimal mock XREAD response
