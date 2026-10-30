@@ -96,6 +96,8 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Runtime preflight hooks, transparent failure interception, and test cleanup routines validate directory permissions and reconcile desynchronized rootless network namespace mounts.
 - **[00053 — Evaluate Podman Pod Co-location for Agent and Sidecars](00053-PodmanPodCoLocationForAgentAndSidecars.md)**
   *Executive Summary:* Evaluates co-locating agent containers and companion sidecars inside rootless Podman pods sharing a single network namespace, comparing pod orchestration against standalone bridge-networked containers in terms of network egress isolation, lifecycle management, port mapping, and migration complexity.
+- **[00056 — Multi-Machine Local Network Fleet Pod Deployment and Federated Gateway DNS](00056-multi-machine-local-network-federation.md)**
+  *Executive Summary:* Evaluates multi-machine physical host deployment, federated backplane bus access, and local network DNS resolution for multi-workstation Fleet clusters. Establishes a hybrid cross-host federation architecture featuring a phased Valkey relay topology, container-aware mDNS/CoreDNS host resolution, remote inference gateway routing, and mutual TLS (mTLS) transport security while preserving end-to-end Ed25519 message signatures.
 
 ### Developer Experience & IDE Ensembling (`THEME-DEVEXP`)
 - **[00016 — One-Shot IDE Remote Development and Host Ensembling](00016-OneShotIdeRemoteDevelopmentAndHostEnsembling.md)**  
