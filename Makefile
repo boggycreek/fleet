@@ -47,7 +47,7 @@ lint-go: ## Run golangci-lint on Go code
 lint-shell: ## Run shellcheck on bash scripts
 	@echo "==> Running shellcheck..."
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck install.sh setup.sh scripts/clean-test-env.sh scripts/deadcode-check.sh scripts/build-sonarqube-image.sh; \
+		shellcheck install.sh setup.sh install-agent.sh scripts/clean-test-env.sh scripts/deadcode-check.sh scripts/build-sonarqube-image.sh; \
 	else \
 		echo "Warning: shellcheck not installed. Run ./setup.sh to install."; \
 	fi
@@ -152,7 +152,7 @@ build-cli: ## Build native Go CLI binaries (fleet, bp, bpd, mcps)
 		ln -sf forgejo-mcp $(BIN_DIR)/gitea-mcp; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/beads-mcp ./mcp/cmd/beads-mcp; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/sonar-mcp ./mcp/cmd/sonar-mcp; \
-		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/fleet-openrouter-proxy ./sandbox/cmd/fleet-openrouter-proxy; \
+		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/fleet-openrouter-proxy ./cli/cmd/fleet-openrouter-proxy; \
 		echo "Binaries built in $(BIN_DIR)/ (alias: $(BIN_DIR)/ft)"; \
 	else \
 		echo "Notice: go.work not yet initialized. Skipping build."; \

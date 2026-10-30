@@ -370,8 +370,8 @@ func ProvisionAgent(ctx context.Context, cfg *config.AgentConfig, paths config.P
 	}
 
 	// 4. SonarQube User & Analysis Token
-	if cfg.IsNoContainer() {
-		report.AddStep("SonarQube Account & Token", StatusSkipped, "No-container agent has no container boundary (skipped)", nil)
+	if cfg.IsNoContainer() || cfg.IsBaremetal() {
+		report.AddStep("SonarQube Account & Token", StatusSkipped, "No-container/baremetal agent has no container boundary (skipped)", nil)
 	} else if os.Getenv("SONAR_DISABLED") == "1" {
 		report.AddStep("SonarQube Account & Token", StatusSkipped, "SonarQube infrastructure is disabled via SONAR_DISABLED (skipped)", nil)
 	} else if err := RegisterSonarUser(ctx, cfg, paths); err == nil {

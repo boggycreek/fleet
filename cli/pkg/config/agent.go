@@ -54,8 +54,12 @@ type AgentConfig struct {
 	SonarToken    string    `json:"sonar_token,omitempty"`
 	PodName       string    `json:"pod_name,omitempty"`
 	UsePod        bool      `json:"use_pod,omitempty"`
-	Runtime       string    `json:"runtime,omitempty"` // "container" (default), "host-container", or "no-container"
+	Runtime       string    `json:"runtime,omitempty"` // "container" (default), "host-container", "no-container", or "baremetal"
 	HostOnly      bool      `json:"host_only,omitempty"`
+	Baremetal     bool      `json:"baremetal,omitempty"`
+	SSHHost       string    `json:"ssh_host,omitempty"`
+	SSHPort       int       `json:"ssh_port,omitempty"`
+	SSHUser       string    `json:"ssh_user,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -73,6 +77,11 @@ func (c *AgentConfig) UsePods() bool {
 		return true
 	}
 	return os.Getenv("FLEET_ENABLE_PODS") == "1"
+}
+
+// IsBaremetal returns true if the agent is configured to run directly on a baremetal physical machine.
+func (c *AgentConfig) IsBaremetal() bool {
+	return c.Baremetal || c.Runtime == "baremetal"
 }
 
 // IsNoContainer returns true if the agent runs directly on the host without any container.

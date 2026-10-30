@@ -133,6 +133,24 @@ func TestPathsAndAgentConfig(t *testing.T) {
 		t.Errorf("expected all host helpers to return false for standard container")
 	}
 
+	// Baremetal agent tests
+	if cfg.IsBaremetal() {
+		t.Errorf("expected IsBaremetal()=false for standard container")
+	}
+	cfg.Baremetal = true
+	cfg.SSHHost = "192.168.1.100"
+	cfg.SSHPort = 2222
+	cfg.SSHUser = "debian"
+	if !cfg.IsBaremetal() {
+		t.Errorf("expected IsBaremetal()=true when Baremetal=true")
+	}
+	cfg.Baremetal = false
+	cfg.Runtime = "baremetal"
+	if !cfg.IsBaremetal() {
+		t.Errorf("expected IsBaremetal()=true when Runtime=baremetal")
+	}
+	cfg.Runtime = "container"
+
 	// New image presets
 	if img := ResolveImage("core"); img != "fleet-core:latest" {
 		t.Errorf("expected core preset to resolve to fleet-core:latest, got %q", img)

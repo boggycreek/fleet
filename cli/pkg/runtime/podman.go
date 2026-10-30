@@ -1471,6 +1471,41 @@ func FormatSSHConfigBlock(name string, port int, keyFile string) string {
 	return fmt.Sprintf("Host fleet-%s\n    HostName 127.0.0.1\n    Port %d\n    User agent\n    IdentityFile %s\n    IdentitiesOnly yes\n    UserKnownHostsFile %s\n    StrictHostKeyChecking accept-new\n", name, port, keyFile, knownHostsFile)
 }
 
+// FormatBaremetalSSHConfigBlock returns an OpenSSH host block string for a baremetal agent.
+func FormatBaremetalSSHConfigBlock(cfg *config.AgentConfig, keyFile string) string {
+	if keyFile == "" {
+		home, _ := os.UserHomeDir()
+		if home == "" {
+			home = "/tmp"
+		}
+		keyFile = filepath.Join(home, ".ssh", "fleet")
+	}
+	port := cfg.SSHPort
+	if port <= 0 {
+		port = 22
+	}
+	user := cfg.SSHUser
+	if user == "" {
+		user = os.Getenv("USER")
+		if user == "" {
+			user = "agent"
+		}
+	}
+	host := cfg.SSHHost
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("Host fleet-%s\n    HostName %s\n    Port %d\n    User %s\n    IdentityFile %s\n    StrictHostKeyChecking accept-new\n", cfg.Name, host, port, user, keyFile)
+}
+
+// FormatAgentSSHConfigBlock returns the appropriate OpenSSH host block string for either container or baremetal agents.
+func FormatAgentSSHConfigBlock(cfg *config.AgentConfig, port int, keyFile string) string {
+	if cfg.IsBaremetal() {
+		return FormatBaremetalSSHConfigBlock(cfg, keyFile)
+	}
+	return FormatSSHConfigBlock(cfg.Name, port, keyFile)
+}
+
 // SyncSSHConfigFile updates the managed SSH config file with Host blocks for all currently running agents.
 func SyncSSHConfigFile(ctx context.Context, paths config.Paths) error {
 	configs, err := config.ListAgentConfigs(paths)
@@ -1497,6 +1532,14 @@ func SyncSSHConfigFile(ctx context.Context, paths config.Paths) error {
 
 	runningCount := 0
 	for _, c := range configs {
+		if c.IsBaremetal() {
+			if runningCount > 0 {
+				buf.WriteString("\n")
+			}
+			buf.WriteString(FormatBaremetalSSHConfigBlock(c, ideKeyFile))
+			runningCount++
+			continue
+		}
 		port, err := GetAgentSSHPort(ctx, c.ContainerName)
 		if err == nil && port > 0 {
 			if runningCount > 0 {

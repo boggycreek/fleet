@@ -234,6 +234,42 @@ func TestDoctor_NoContainer_ForgejoAndSonar(t *testing.T) {
 	}
 }
 
+func TestDoctor_Baremetal_DoctorChecks(t *testing.T) {
+	ctx := context.Background()
+	paths := config.Paths{}
+	cfg := &config.AgentConfig{
+		Name:      "bare-doc",
+		Baremetal: true,
+		SSHHost:   "192.168.1.100",
+		SSHPort:   22,
+		SSHUser:   "debian",
+	}
+
+	repStorage := &DoctorReport{AgentName: cfg.Name}
+	checkAndHealPodmanStorage(ctx, cfg, repStorage)
+	if len(repStorage.Checks) == 0 || repStorage.Checks[0].Status != StatusOK || !strings.Contains(repStorage.Checks[0].Message, "Baremetal agent") {
+		t.Errorf("unexpected storage check for baremetal agent: %+v", repStorage.Checks)
+	}
+
+	repImg := &DoctorReport{AgentName: cfg.Name}
+	checkAndHealImage(ctx, cfg, paths, repImg)
+	if len(repImg.Checks) == 0 || repImg.Checks[0].Status != StatusOK || !strings.Contains(repImg.Checks[0].Message, "Baremetal agent") {
+		t.Errorf("unexpected image check for baremetal agent: %+v", repImg.Checks)
+	}
+
+	repCont := &DoctorReport{AgentName: cfg.Name}
+	checkAndHealContainer(ctx, cfg, paths, repCont)
+	if len(repCont.Checks) == 0 || repCont.Checks[0].Status != StatusOK || !strings.Contains(repCont.Checks[0].Message, "192.168.1.100") {
+		t.Errorf("unexpected container check for baremetal agent: %+v", repCont.Checks)
+	}
+
+	repSonar := &DoctorReport{AgentName: cfg.Name}
+	checkAndHealSonar(ctx, cfg, paths, repSonar)
+	if len(repSonar.Checks) == 0 || repSonar.Checks[0].Status != StatusOK || !strings.Contains(repSonar.Checks[0].Message, "Baremetal agent") {
+		t.Errorf("unexpected sonar check for baremetal agent: %+v", repSonar.Checks)
+	}
+}
+
 func TestDoctor_ValkeyAndForgejo_DefaultAdminPassword(t *testing.T) {
 	ctx := context.Background()
 	paths := config.Paths{}

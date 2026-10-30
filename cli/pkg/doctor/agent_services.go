@@ -216,6 +216,14 @@ func checkAndHealForgejo(ctx context.Context, cfg *config.AgentConfig, paths con
 }
 
 func checkAndHealSonar(ctx context.Context, cfg *config.AgentConfig, paths config.Paths, report *DoctorReport) {
+	if cfg.IsBaremetal() {
+		report.Checks = append(report.Checks, CheckItem{
+			Name:    "SonarQube Analysis",
+			Status:  StatusOK,
+			Message: "Baremetal agent (no SonarQube account required)",
+		})
+		return
+	}
 	if cfg.IsNoContainer() || os.Getenv("SONAR_DISABLED") == "1" {
 		report.Checks = append(report.Checks, CheckItem{
 			Name:    "SonarQube Analysis",

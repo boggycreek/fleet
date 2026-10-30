@@ -109,6 +109,28 @@ func TestLifecycleNoContainerAndDisabled(t *testing.T) {
 	if deprovRep2.HasErrors() {
 		t.Errorf("expected no errors when deprovisioning with disabled services: %s", FormatReport(deprovRep2))
 	}
+
+	// 3. Baremetal agent with FORGEJO_DISABLED=1 and SONAR_DISABLED=1
+	cfgBare := &config.AgentConfig{
+		Name:      "bare-lifecycle-node",
+		Baremetal: true,
+		Runtime:   "baremetal",
+		SSHHost:   "10.0.0.99",
+		SSHPort:   22,
+		SSHUser:   "nodeadmin",
+		Password:  "baresecret789",
+	}
+	_ = config.SaveAgentConfig(cfgBare, paths)
+
+	provRepBare := ProvisionAgent(ctx, cfgBare, paths)
+	if provRepBare.HasErrors() {
+		t.Errorf("expected no errors when provisioning baremetal agent: %s", FormatReport(provRepBare))
+	}
+
+	deprovRepBare := DeprovisionAgent(ctx, cfgBare, paths)
+	if deprovRepBare.HasErrors() {
+		t.Errorf("expected no errors when deprovisioning baremetal agent: %s", FormatReport(deprovRepBare))
+	}
 }
 
 func TestDeprovisionNotFound404Handling(t *testing.T) {

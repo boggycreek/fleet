@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -92,8 +93,8 @@ func handleAgent(ctx context.Context, paths config.Paths, args []string, stdout,
 		fmt.Fprintf(stdout, `Usage: %s agent <command> [args...]
 
 Commands:
-  create <name> [as <type|oci>] [--image <type|oci>] [--role <role>] [--host] [--no-container] [--pwd <path>] [--model-url <url>] [--model-name <name>] [--model-key <key>]
-    Provision a new named agent (container sandbox, host-connected container with --host, or no-container with --no-container).
+  create <name> [as <type|oci>] [--image <type|oci>] [--role <role>] [--host] [--no-container] [--baremetal --ssh-host <host>] [--pwd <path>] [--model-url <url>] [--model-name <name>] [--model-key <key>]
+    Provision a new named agent (container sandbox, host-connected container with --host, no-container with --no-container, or baremetal physical machine with --baremetal).
 
   provision <name>
     Provision or re-provision agent infrastructure, keys, Valkey ACLs, Forgejo accounts, and SonarQube credentials.
@@ -211,6 +212,13 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 	// Flag parsing for overrides
 	isHostContainer := false
 	isNoContainer := false
+	isBaremetal := false
+	var sshHost string
+	sshPort := 22
+	var sshUser string
+	enrollPort := 8765
+	var controllerHost string
+	noEnroll := false
 	usePod := os.Getenv("FLEET_ENABLE_PODS") == "1"
 	var pwdPath string
 	var dockerfilePath string
@@ -230,6 +238,13 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 	fs.BoolVar(&usePod, "use-pod", usePod, "Co-locate agent and sidecars in a Podman pod (ADR 00053)")
 	fs.BoolVar(&isHostContainer, "host", false, "Provision host-connected container agent with workspace projection")
 	fs.BoolVar(&isNoContainer, "no-container", false, "Provision agent without a container (direct host execution)")
+	fs.BoolVar(&isBaremetal, "baremetal", false, "Provision agent directly on baremetal physical host")
+	fs.StringVar(&sshHost, "ssh-host", "", "Target baremetal machine IP or hostname for SSH access")
+	fs.IntVar(&sshPort, "ssh-port", 22, "Target baremetal machine SSH port")
+	fs.StringVar(&sshUser, "ssh-user", "", "Target baremetal machine SSH user (default: current host user)")
+	fs.IntVar(&enrollPort, "enroll-port", 8765, "Ephemeral enrollment server HTTP port")
+	fs.StringVar(&controllerHost, "controller-host", "", "Controller host IP or LAN hostname accessible from baremetal node")
+	fs.BoolVar(&noEnroll, "no-enroll", false, "Skip waiting for ephemeral enrollment connection")
 	fs.StringVar(&pwdPath, "pwd", "", "Host working directory to project into container workspace (default: current directory)")
 
 	var flagArgs []string
@@ -239,6 +254,15 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 		flagArgs = args[1:]
 	}
 	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+
+	if isBaremetal && (isHostContainer || isNoContainer) {
+		fmt.Fprintf(stderr, "%s error: cannot combine --baremetal with --host or --no-container\n", bin)
+		return 1
+	}
+	if isBaremetal && strings.TrimSpace(sshHost) == "" {
+		fmt.Fprintf(stderr, "%s error: --ssh-host <host> is required for baremetal agents\n", bin)
 		return 1
 	}
 
@@ -314,7 +338,7 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 	}
 
 	resolvedImage := image
-	if shouldBuildCustom && !isNoContainer {
+	if shouldBuildCustom && !isNoContainer && !isBaremetal {
 		targetDockerfile := dockerfilePath
 		if targetDockerfile == "" {
 			if localDockerfile != "" {
@@ -359,13 +383,15 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 	} else if image == "" {
 		if isHostContainer {
 			image = "tool"
+		} else if isBaremetal {
+			image = "baremetal"
 		} else {
 			image = "base"
 		}
 		resolvedImage = image
 	}
 
-	if !shouldBuildCustom && !isNoContainer {
+	if !shouldBuildCustom && !isNoContainer && !isBaremetal {
 		var isLocal bool
 		resolvedImage, isLocal = runtime.ResolveAgentImage(ctx, image)
 		if resolvedImage == "" {
@@ -403,6 +429,25 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 		cfg.ContainerName = ""
 		cfg.VolumeName = ""
 		cfg.Image = "no-container"
+	} else if isBaremetal {
+		cfg.Runtime = "baremetal"
+		cfg.Baremetal = true
+		cfg.SSHHost = strings.TrimSpace(sshHost)
+		if sshPort <= 0 {
+			sshPort = 22
+		}
+		cfg.SSHPort = sshPort
+		cleanUser := strings.TrimSpace(sshUser)
+		if cleanUser == "" {
+			cleanUser = os.Getenv("USER")
+			if cleanUser == "" {
+				cleanUser = "agent"
+			}
+		}
+		cfg.SSHUser = cleanUser
+		cfg.ContainerName = ""
+		cfg.VolumeName = ""
+		cfg.Image = "baremetal"
 	}
 
 	if err := config.SaveAgentConfig(cfg, paths); err != nil {
@@ -418,6 +463,17 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 		fmt.Fprintf(stdout, "  Role:       %s\n", cfg.Role)
 		fmt.Fprintf(stdout, "  BP Profile: %s\n", filepath.Join(paths.BPProfilesDir, fmt.Sprintf("%s.env", cfg.Name)))
 		fmt.Fprintln(stdout, "\nWARNING: No-container agent runs directly on the host without container isolation. Full access to host filesystem and credentials is permitted.")
+	} else if cfg.IsBaremetal() {
+		fmt.Fprintf(stdout, "  Runtime:    baremetal (physical host execution)\n")
+		fmt.Fprintf(stdout, "  SSH Target: %s@%s:%d\n", cfg.SSHUser, cfg.SSHHost, cfg.SSHPort)
+		fmt.Fprintf(stdout, "  Role:       %s\n", cfg.Role)
+		if cfg.ModelURL != "" {
+			fmt.Fprintf(stdout, "  Model URL:  %s\n", cfg.ModelURL)
+		}
+		if cfg.ModelName != "" {
+			fmt.Fprintf(stdout, "  Model Name: %s\n", cfg.ModelName)
+		}
+		fmt.Fprintf(stdout, "  BP Profile: %s\n", filepath.Join(paths.BPProfilesDir, fmt.Sprintf("%s.env", cfg.Name)))
 	} else if cfg.IsHostContainer() {
 		fmt.Fprintf(stdout, "  Runtime:    host-container (host workspace projection)\n")
 		fmt.Fprintf(stdout, "  Workspace:  %s\n", cfg.WorkspacePath)
@@ -455,6 +511,98 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 	}
 	if cfg.IsNoContainer() {
 		fmt.Fprintf(stdout, "To use:   bp --profile %s tell <recipient> <msg>\n", cfg.Name)
+	} else if cfg.IsBaremetal() {
+		if noEnroll {
+			fmt.Fprintf(stdout, "\nBaremetal agent %q provisioned (enrollment skipped via --no-enroll).\n", cfg.Name)
+			return 0
+		}
+
+		lanHost := controllerHost
+		if lanHost == "" {
+			lanHost = lifecycle.DetectHostLANIP(cfg.SSHHost)
+		}
+
+		valkeyHost := lanHost
+		if v := os.Getenv("VALKEY_HOST"); v != "" {
+			valkeyHost = v
+		} else if v := os.Getenv("BP_HOST"); v != "" && v != "127.0.0.1" && v != "localhost" {
+			valkeyHost = v
+		}
+
+		valkeyPort := 6379
+		if p := os.Getenv("BP_PORT"); p != "" {
+			if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+				valkeyPort = parsed
+			}
+		}
+
+		forgejoURL := os.Getenv("FORGEJO_URL")
+		if forgejoURL == "" {
+			forgejoURL = os.Getenv("GITEA_URL")
+		}
+		if forgejoURL == "" {
+			forgejoURL = fmt.Sprintf("http://%s:3000", lanHost)
+		} else {
+			forgejoURL = lifecycle.RewriteURLForLAN(forgejoURL, lanHost)
+		}
+
+		modelURL := cfg.ModelURL
+		if modelURL == "" {
+			modelURL = os.Getenv("OPENAI_BASE_URL")
+		}
+		if modelURL == "" {
+			modelURL = fmt.Sprintf("http://%s:8080/v1", lanHost)
+		} else {
+			modelURL = lifecycle.RewriteURLForLAN(modelURL, lanHost)
+		}
+
+		secrets := lifecycle.EnrollmentSecrets{
+			AgentName:          cfg.Name,
+			AgentRole:          cfg.Role,
+			AgentSigningKeyPEM: cfg.SigningKeyPEM,
+			ValkeyHost:         valkeyHost,
+			ValkeyPort:         valkeyPort,
+			ValkeyPassword:     cfg.Password,
+			ForgejoURL:         forgejoURL,
+			OpenAIBaseURL:      modelURL,
+			OpenAIModel:        cfg.ModelName,
+			OpenAIAPIKey:       cfg.ModelAPIKey,
+		}
+
+		enrollServer, err := lifecycle.NewEnrollmentServer(lifecycle.EnrollmentConfig{
+			AgentName: cfg.Name,
+			Secrets:   secrets,
+			Port:      enrollPort,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "%s error starting enrollment server: %v\n", bin, err)
+			return 1
+		}
+		enrollServer.Start()
+		defer func() { _ = enrollServer.Shutdown(context.Background()) }()
+
+		installCmd := enrollServer.InstallCommand(lanHost)
+		fmt.Fprintf(stdout, "\n============================================================\n")
+		fmt.Fprintf(stdout, " BAREMETAL ENROLLMENT ACTIVE (Single-Use Token)\n")
+		fmt.Fprintf(stdout, "============================================================\n")
+		fmt.Fprintf(stdout, "Controller listening at: %s (TTL: 15m)\n", enrollServer.URL(lanHost))
+		fmt.Fprintf(stdout, "To bootstrap and enroll on %s, run:\n\n", cfg.SSHHost)
+		fmt.Fprintf(stdout, "  %s\n\n", installCmd)
+		fmt.Fprintf(stdout, "Waiting for baremetal agent to collect credentials...\n")
+
+		if err := enrollServer.Wait(ctx); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				fmt.Fprintf(stderr, "\n%s: enrollment timed out or cancelled\n", bin)
+				return 1
+			}
+			fmt.Fprintf(stderr, "\n%s enrollment error: %v\n", bin, err)
+			return 1
+		}
+
+		fmt.Fprintf(stdout, "[✓] Credentials collected and token burned successfully!\n")
+		fmt.Fprintf(stdout, "Agent %q is now ready.\n", cfg.Name)
+		fmt.Fprintf(stdout, "  SSH:   %s agent ssh %s\n", bin, cfg.Name)
+		fmt.Fprintf(stdout, "  IDE:   %s agent open %s in vscode\n", bin, cfg.Name)
 	} else {
 		fmt.Fprintf(stdout, "To start: %s agent start %s\n", bin, cfg.Name)
 	}
@@ -478,6 +626,12 @@ func handleAgentStart(ctx context.Context, paths config.Paths, args []string, st
 	if cfg.IsNoContainer() {
 		fmt.Fprintf(stdout, "Agent %q is a no-container agent (no container required).\n", cfg.Name)
 		fmt.Fprintf(stdout, "Use directly via: bp --profile %s <command>\n", cfg.Name)
+		return 0
+	}
+
+	if cfg.IsBaremetal() {
+		fmt.Fprintf(stdout, "Agent %q is a baremetal agent running via systemd on %s.\n", cfg.Name, cfg.SSHHost)
+		fmt.Fprintf(stdout, "Manage on target machine via: systemctl --user status fleet-agent\n")
 		return 0
 	}
 
@@ -522,6 +676,11 @@ func handleAgentTmux(ctx context.Context, paths config.Paths, args []string, std
 		fmt.Fprintf(stderr, "%s error: agent %q is a no-container agent (no container or tmux session)\n", bin, cfg.Name)
 		return 1
 	}
+
+	if cfg.IsBaremetal() {
+		fmt.Fprintf(stderr, "%s error: agent %q is a baremetal agent (runs headless daemon on %s)\n", bin, cfg.Name, cfg.SSHHost)
+		return 1
+	}
 	if cfg.IsHostContainer() {
 		fmt.Fprintf(stderr, "%s error: agent %q is a host tool container without tmux (connect via '%s agent connect %s')\n", bin, cfg.Name, bin, cfg.Name)
 		return 1
@@ -547,6 +706,10 @@ func handleAgentConnect(ctx context.Context, paths config.Paths, args []string, 
 	}
 	name := args[0]
 	cfg, err := config.LoadAgentConfig(name, paths)
+	if err == nil && cfg.IsBaremetal() {
+		fmt.Fprintf(stderr, "%s error: agent %q is a baremetal agent (use 'ssh' to connect)\n", bin, cfg.Name)
+		return 1
+	}
 	if err == nil && cfg.IsHostContainer() {
 		info, err := runtime.InspectAgentContainer(ctx, cfg.ContainerName)
 		if err != nil || info == nil || info.State != "running" {
@@ -676,17 +839,26 @@ func handleAgentOpen(ctx context.Context, paths config.Paths, args []string, std
 		return 1
 	}
 
-	port, err := runtime.GetAgentSSHPort(ctx, cfg.ContainerName)
-	if err != nil || port <= 0 {
-		bpCfg := libbp.LoadClientFromEnv()
-		if startErr := runtime.StartAgentContainer(ctx, cfg, paths, bpCfg.Host, bpCfg.Port); startErr != nil {
-			fmt.Fprintf(stderr, "%s error starting agent container %s: %v\n", bin, cfg.ContainerName, startErr)
-			return 1
+	var port int
+	if cfg.IsBaremetal() {
+		port = cfg.SSHPort
+		if port <= 0 {
+			port = 22
 		}
+	} else {
+		var err error
 		port, err = runtime.GetAgentSSHPort(ctx, cfg.ContainerName)
 		if err != nil || port <= 0 {
-			fmt.Fprintf(stderr, "%s error discovering SSH port for %s: %v\n", bin, cfg.Name, err)
-			return 1
+			bpCfg := libbp.LoadClientFromEnv()
+			if startErr := runtime.StartAgentContainer(ctx, cfg, paths, bpCfg.Host, bpCfg.Port); startErr != nil {
+				fmt.Fprintf(stderr, "%s error starting agent container %s: %v\n", bin, cfg.ContainerName, startErr)
+				return 1
+			}
+			port, err = runtime.GetAgentSSHPort(ctx, cfg.ContainerName)
+			if err != nil || port <= 0 {
+				fmt.Fprintf(stderr, "%s error discovering SSH port for %s: %v\n", bin, cfg.Name, err)
+				return 1
+			}
 		}
 	}
 
@@ -702,6 +874,26 @@ func handleAgentOpen(ctx context.Context, paths config.Paths, args []string, std
 	jbSSHURI := fmt.Sprintf("ssh://agent@localhost:%d/home/agent/workspace", port)
 	jbGatewayURI := fmt.Sprintf("jetbrains://gateway/ssh/environment?h=127.0.0.1&u=agent&p=%d&launchIde=true&projectHint=/home/agent/workspace", port)
 	jbConnectURI := fmt.Sprintf("jetbrains-gateway://connect#host=127.0.0.1&port=%d&user=agent&type=ssh&projectPath=/home/agent/workspace", port)
+
+	if cfg.IsBaremetal() {
+		sshUser := cfg.SSHUser
+		if sshUser == "" {
+			if u := os.Getenv("USER"); u != "" {
+				sshUser = u
+			} else {
+				sshUser = "agent"
+			}
+		}
+		sshHost := cfg.SSHHost
+		if sshHost == "" {
+			sshHost = "127.0.0.1"
+		}
+		remoteWorkspace := fmt.Sprintf("/home/%s/workspace", sshUser)
+		vsCodeURI = fmt.Sprintf("vscode-remote://ssh-remote+%s%s", hostAlias, remoteWorkspace)
+		jbSSHURI = fmt.Sprintf("ssh://%s@%s:%d%s", sshUser, sshHost, port, remoteWorkspace)
+		jbGatewayURI = fmt.Sprintf("jetbrains://gateway/ssh/environment?h=%s&u=%s&p=%d&launchIde=true&projectHint=%s", sshHost, sshUser, port, remoteWorkspace)
+		jbConnectURI = fmt.Sprintf("jetbrains-gateway://connect#host=%s&port=%d&user=%s&type=ssh&projectPath=%s", sshHost, port, sshUser, remoteWorkspace)
+	}
 
 	if noLaunch {
 		fmt.Fprintf(stdout, "SSH host alias prepared: %s (Port: %d)\n", hostAlias, port)
@@ -788,18 +980,43 @@ func handleAgentSSH(ctx context.Context, paths config.Paths, args []string, stdo
 		return 1
 	}
 
-	port, err := runtime.GetAgentSSHPort(ctx, cfg.ContainerName)
-	if err != nil {
-		fmt.Fprintf(stderr, "%s error discovering SSH port for %s: %v\n", bin, cfg.Name, err)
-		return 1
-	}
+	var sshArgs []string
+	if cfg.IsBaremetal() {
+		sshHost := cfg.SSHHost
+		if sshHost == "" {
+			sshHost = "127.0.0.1"
+		}
+		port := cfg.SSHPort
+		if port <= 0 {
+			port = 22
+		}
+		sshUser := cfg.SSHUser
+		if sshUser == "" {
+			sshUser = os.Getenv("USER")
+			if sshUser == "" {
+				sshUser = "agent"
+			}
+		}
+		sshArgs = []string{
+			"-i", paths.IDEKeyFile,
+			"-p", fmt.Sprintf("%d", port),
+			"-o", "StrictHostKeyChecking=accept-new",
+			fmt.Sprintf("%s@%s", sshUser, sshHost),
+		}
+	} else {
+		port, err := runtime.GetAgentSSHPort(ctx, cfg.ContainerName)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s error discovering SSH port for %s: %v\n", bin, cfg.Name, err)
+			return 1
+		}
 
-	sshArgs := []string{
-		"-i", paths.IDEKeyFile,
-		"-p", fmt.Sprintf("%d", port),
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"agent@localhost",
+		sshArgs = []string{
+			"-i", paths.IDEKeyFile,
+			"-p", fmt.Sprintf("%d", port),
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			"agent@localhost",
+		}
 	}
 
 	cmd := runtime.CommandContext(ctx, "ssh", sshArgs...)
@@ -827,6 +1044,10 @@ func handleAgentSSHConfig(ctx context.Context, paths config.Paths, args []string
 			fmt.Fprintf(stderr, "%s error: %v\n", bin, err)
 			return 1
 		}
+		if cfg.IsBaremetal() {
+			fmt.Fprint(stdout, runtime.FormatBaremetalSSHConfigBlock(cfg, paths.IDEKeyFile))
+			return 0
+		}
 		port, err := runtime.GetAgentSSHPort(ctx, cfg.ContainerName)
 		if err != nil || port <= 0 {
 			fmt.Fprintf(stderr, "%s error: agent %q is not running or SSH port is unavailable\n", bin, cfg.Name)
@@ -844,6 +1065,14 @@ func handleAgentSSHConfig(ctx context.Context, paths config.Paths, args []string
 
 	runningCount := 0
 	for _, c := range configs {
+		if c.IsBaremetal() {
+			if runningCount > 0 {
+				fmt.Fprintln(stdout)
+			}
+			fmt.Fprint(stdout, runtime.FormatBaremetalSSHConfigBlock(c, paths.IDEKeyFile))
+			runningCount++
+			continue
+		}
 		port, err := runtime.GetAgentSSHPort(ctx, c.ContainerName)
 		if err == nil && port > 0 {
 			if runningCount > 0 {
@@ -892,7 +1121,7 @@ func handleAgentStop(ctx context.Context, paths config.Paths, args []string, std
 	if args[0] == "--all" {
 		configs, _ := config.ListAgentConfigs(paths)
 		for _, c := range configs {
-			if c.IsNoContainer() {
+			if c.IsNoContainer() || c.IsBaremetal() {
 				continue
 			}
 			lifecycle.WarnOnErr(stderr, runtime.StopAgentContainer(ctx, c.ContainerName), "stop container "+c.ContainerName)
@@ -911,6 +1140,12 @@ func handleAgentStop(ctx context.Context, paths config.Paths, args []string, std
 
 	if cfg.IsNoContainer() {
 		fmt.Fprintf(stdout, "Agent %q is a no-container agent (no container to stop).\n", cfg.Name)
+		return 0
+	}
+
+	if cfg.IsBaremetal() {
+		fmt.Fprintf(stdout, "Agent %q is a baremetal agent running via systemd on %s.\n", cfg.Name, cfg.SSHHost)
+		fmt.Fprintf(stdout, "Stop on target machine via: systemctl --user stop fleet-agent\n")
 		return 0
 	}
 
@@ -939,6 +1174,11 @@ func handleAgentClean(ctx context.Context, paths config.Paths, args []string, st
 	if cfg.IsNoContainer() {
 		fmt.Fprintf(stderr, "%s error: agent %q is a no-container agent (no container or home volume to clean; use '%s agent retire %s' to deprovision)\n", bin, cfg.Name, bin, cfg.Name)
 		return 1
+	}
+
+	if cfg.IsBaremetal() {
+		fmt.Fprintf(stdout, "Agent %q is a baremetal agent (no container to clean).\n", cfg.Name)
+		return 0
 	}
 
 	if err := runtime.CleanAgentContainer(ctx, cfg.ContainerName); err != nil {
@@ -1107,6 +1347,27 @@ func handleAgentList(ctx context.Context, paths config.Paths, args []string, std
 				ContainerState: "HOST",
 				SSHPort:        0,
 				IDEConnect:     "-",
+			})
+			continue
+		}
+
+		if c.IsBaremetal() {
+			port := c.SSHPort
+			if port <= 0 {
+				port = 22
+			}
+			user := c.SSHUser
+			if user == "" {
+				user = "agent"
+			}
+			statuses = append(statuses, runtime.AgentStatus{
+				Name:           c.Name,
+				Role:           c.Role,
+				Image:          "baremetal",
+				ContainerName:  "-",
+				ContainerState: "BAREMETAL",
+				SSHPort:        port,
+				IDEConnect:     fmt.Sprintf("%s@%s:%d", user, c.SSHHost, port),
 			})
 			continue
 		}
