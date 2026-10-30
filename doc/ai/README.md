@@ -9,6 +9,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[Testing Guidelines & Coverage Gates](testing-guidelines.md)** (`fleet-testing-guidelines`): Strict >=90% test coverage enforcement, rootless Podman cleanup patterns, containerized smoke testing.
 - **[Diagnostic Doctor & Auto-Healing](doctor-diagnostics.md)** (`fleet-doctor-diagnostics`): `fleet agent doctor` and `fleet infra doctor` architecture, check categories, healing behavior.
 - **[Code Review Protocol](code-review.md)** (`fleet-code-review`): Protocol, inspection checklist, and reporting format for architectural, logical, and security PR reviews.
+- **[Shell & CI Security Audit Findings](shell-and-ci-audit-findings.md)** (`fleet-shell-and-ci-audit-findings`): Targeted security, error handling, and portability audit findings for Fleet's shell scripts, installer, setup, and GitHub Actions CI toolchains.
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.

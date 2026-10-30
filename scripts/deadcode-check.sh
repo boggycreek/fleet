@@ -78,6 +78,7 @@ if [ "${MODE}" = "diff" ]; then
 
   echo "Target changes from: ${DIFF_TARGET}"
   echo "Modified Go files:"
+  # shellcheck disable=SC2001
   echo "${CHANGED_FILES}" | sed 's/^/  • /'
 
   # Run deadcode analysis with -test to find truly dead/unreachable code
@@ -94,9 +95,12 @@ if [ "${MODE}" = "diff" ]; then
   CASCADING_COUNT=0
 
   if command -v jq >/dev/null 2>&1; then
-    DEAD_ENTRIES="$(echo "${DEAD_JSON}" | jq -r '.[].Funcs[]? | "\(.Position.File)|\(.Position.Line)|\(.Name)"')"
+    DEAD_ENTRIES="$(echo "${DEAD_JSON}" | jq -r '.[].Funcs[]? | "\(.Position.File)|\(.Position.Line)|\(.Name)"' 2>/dev/null || true)"
+  elif command -v python3 >/dev/null 2>&1; then
+    DEAD_ENTRIES="$(echo "${DEAD_JSON}" | python3 -c "import sys, json; data=json.loads(sys.stdin.read()); print('\n'.join(f\"{fn.get('Position',{}).get('File','')}|{fn.get('Position',{}).get('Line','')}|{fn.get('Name','')}\" for item in data if isinstance(item, dict) for fn in item.get('Funcs', []) if isinstance(fn, dict)))" 2>/dev/null || true)"
   else
-    DEAD_ENTRIES=""
+    echo "Error: deadcode detected potential unreachable functions, but neither 'jq' nor 'python3' is installed to parse results." >&2
+    exit 1
   fi
 
   if [ -n "${DEAD_ENTRIES}" ]; then
@@ -132,6 +136,7 @@ elif [ "${MODE}" = "all" ]; then
   if [ -z "${TRUE_DEAD_OUTPUT}" ]; then
     echo "  [✓] None. Codebase is 100% clean of completely unreachable code."
   else
+    # shellcheck disable=SC2001
     echo "${TRUE_DEAD_OUTPUT}" | sed 's/^/  [!] /'
   fi
   echo
@@ -141,6 +146,7 @@ elif [ "${MODE}" = "all" ]; then
   if [ -z "${BINARY_DEAD_OUTPUT}" ]; then
     echo "  [✓] All package functions are reachable from binary entrypoints."
   else
+    # shellcheck disable=SC2001
     echo "${BINARY_DEAD_OUTPUT}" | sed 's/^/  [i] /'
   fi
   echo

@@ -40,10 +40,12 @@ fi
 
 echo "==> Using SonarQube distribution archive: ${ZIP_FILE}"
 
-BUILD_TMP="$(mktemp -d /tmp/sonarqube-build-XXXXXX)"
+BUILD_TMP="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/sonarqube-build-XXXXXX")"
 cleanup() {
     echo "==> Cleaning temporary build workspace..."
-    rm -rf "${BUILD_TMP}"
+    if [ -n "${BUILD_TMP:-}" ] && [ -d "${BUILD_TMP}" ]; then
+        rm -rf "${BUILD_TMP}"
+    fi
 }
 trap cleanup EXIT
 
