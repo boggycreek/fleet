@@ -274,3 +274,38 @@ func TestServerReadError(t *testing.T) {
 		t.Errorf("expected simulated read error, got %v", err)
 	}
 }
+
+func TestServerJSONRPCComplianceAndBounds(t *testing.T) {
+	// 1. Check jsonrpc version validation
+	invalidVerInput := bytes.NewBufferString(`{"jsonrpc":"1.0","id":1,"method":"tools/list"}` + "\n")
+	outBuf := &bytes.Buffer{}
+	server := NewServer("test", "0.1", invalidVerInput, outBuf, nil, nil)
+	if err := server.Serve(context.Background()); err != nil {
+		t.Fatalf("unexpected Serve error: %v", err)
+	}
+	var errResp JSONRPCMessage
+	if err := json.Unmarshal(outBuf.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed unmarshaling error response: %v", err)
+	}
+	if errResp.Error == nil || errResp.Error.Code != CodeInvalidRequest {
+		t.Errorf("expected CodeInvalidRequest for jsonrpc != '2.0', got %+v", errResp.Error)
+	}
+
+	// 2. Check null ID output formatting
+	parseErrInput := bytes.NewBufferString(`{bad json` + "\n")
+	outBuf.Reset()
+	server = NewServer("test", "0.1", parseErrInput, outBuf, nil, nil)
+	_ = server.Serve(context.Background())
+	if !strings.Contains(outBuf.String(), `"id":null`) {
+		t.Errorf("expected explicit '\"id\":null' in error response, got %s", outBuf.String())
+	}
+
+	// 3. Line length limit error
+	largeLine := strings.Repeat("a", maxLineLength+10) + "\n"
+	outBuf.Reset()
+	server = NewServer("test", "0.1", bytes.NewBufferString(largeLine), outBuf, nil, nil)
+	_ = server.Serve(context.Background())
+	if !strings.Contains(outBuf.String(), "exceeds maximum limit") {
+		t.Errorf("expected max limit error response, got %s", outBuf.String())
+	}
+}

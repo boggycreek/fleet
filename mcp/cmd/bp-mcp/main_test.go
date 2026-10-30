@@ -19,6 +19,7 @@ import (
 
 	"github.com/boggycreek/fleet/backplane/pkg/libbp"
 	"github.com/boggycreek/fleet/backplane/test/harness"
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 type mockBPClient struct {
@@ -299,4 +300,45 @@ func TestMainFunction(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=TestMainFunction")
 	cmd.Env = append(os.Environ(), "TEST_RUN_MAIN=1", "BP_HOST=127.0.0.1", "BP_PORT=1")
 	_ = cmd.Run()
+}
+
+func TestBPMCPSecurityValidation(t *testing.T) {
+	client := &mockBPClient{}
+	server := NewMCPServer(client, bytes.NewBuffer(nil), &bytes.Buffer{})
+
+	// 1. Invalid recipient with whitespace/control chars
+	resRec := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "fleet_send_message",
+		Arguments: json.RawMessage(`{"recipient":"bad agent\nname","message":"hello"}`),
+	})
+	if !resRec.IsError || !strings.Contains(resRec.Content[0].Text, "forbidden whitespace") {
+		t.Errorf("expected recipient validation error, got: %+v", resRec)
+	}
+
+	// 2. Message containing null byte
+	resMsg := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "fleet_send_message",
+		Arguments: json.RawMessage("{\"recipient\":\"agent1\",\"message\":\"bad\\u0000msg\"}"),
+	})
+	if !resMsg.IsError || !strings.Contains(resMsg.Content[0].Text, "Missing or invalid argument 'message'") {
+		t.Errorf("expected null byte message error, got: %+v", resMsg)
+	}
+
+	// 3. Status containing null byte
+	resStatus := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "fleet_set_status",
+		Arguments: json.RawMessage("{\"status\":\"bad\\u0000status\"}"),
+	})
+	if !resStatus.IsError || !strings.Contains(resStatus.Content[0].Text, "Missing or invalid argument 'status'") {
+		t.Errorf("expected status null byte error, got: %+v", resStatus)
+	}
+
+	// 4. File path containing null byte
+	resFile := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "fleet_broadcast",
+		Arguments: json.RawMessage("{\"message\":\"hello\",\"file_path\":\"bad\\u0000path\"}"),
+	})
+	if !resFile.IsError || !strings.Contains(resFile.Content[0].Text, "null bytes") {
+		t.Errorf("expected file_path null byte error, got: %+v", resFile)
+	}
 }

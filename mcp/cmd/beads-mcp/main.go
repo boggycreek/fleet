@@ -32,10 +32,33 @@ type CommandRunner interface {
 	Run(ctx context.Context, dir string, args ...string) (stdout, stderr []byte, err error)
 }
 
+type limitedBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (l *limitedBuffer) Write(p []byte) (int, error) {
+	if l.max > 0 && l.buf.Len() >= l.max {
+		return len(p), nil
+	}
+	remain := p
+	if l.max > 0 && l.buf.Len()+len(p) > l.max {
+		remain = p[:l.max-l.buf.Len()]
+	}
+	_, err := l.buf.Write(remain)
+	return len(p), err
+}
+
+func (l *limitedBuffer) Bytes() []byte {
+	return l.buf.Bytes()
+}
+
 // OSCommandRunner is the production implementation executing the native bd binary
 type OSCommandRunner struct {
 	BinaryPath string
 }
+
+const maxOutputBytes = 10 << 20 // 10MB output capture bound
 
 // Run executes the bd CLI command in the specified directory
 func (r *OSCommandRunner) Run(ctx context.Context, dir string, args ...string) (stdout, stderr []byte, err error) {
@@ -53,12 +76,30 @@ func (r *OSCommandRunner) Run(ctx context.Context, dir string, args ...string) (
 		cmd.Dir = dir
 	}
 
-	var stdoutBuf, stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	stdoutBuf := &limitedBuffer{max: maxOutputBytes}
+	stderrBuf := &limitedBuffer{max: maxOutputBytes}
+	cmd.Stdout = stdoutBuf
+	cmd.Stderr = stderrBuf
 
 	cmdErr := cmd.Run()
 	return stdoutBuf.Bytes(), stderrBuf.Bytes(), cmdErr
+}
+
+var (
+	validStatuses   = map[string]bool{"open": true, "in_progress": true, "closed": true, "deferred": true, "blocked": true}
+	validPriorities = map[string]bool{"P0": true, "P1": true, "P2": true, "P3": true, "P4": true}
+	validTypes      = map[string]bool{"task": true, "feature": true, "bug": true, "chore": true, "epic": true}
+)
+
+func sanitizePositionalArg(val string) error {
+	trimmed := strings.TrimSpace(val)
+	if strings.HasPrefix(trimmed, "-") {
+		return fmt.Errorf("argument %q cannot start with '-'", val)
+	}
+	if strings.ContainsAny(val, "\x00\r\n") {
+		return fmt.Errorf("argument %q contains forbidden control characters", val)
+	}
+	return nil
 }
 
 var beadsTools = []mcp.Tool{
@@ -257,6 +298,9 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 	if dir == "" {
 		dir = s.defaultDir
 	}
+	if dir != "" {
+		dir = strings.TrimSpace(dir)
+	}
 
 	var args []string
 
@@ -273,9 +317,15 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 			args = append(args, "--all")
 		}
 		if statusVal, ok := argsMap["status"].(string); ok && statusVal != "" {
+			if !validStatuses[statusVal] {
+				return mcp.ErrorResult(fmt.Sprintf("Invalid status filter: %s", statusVal))
+			}
 			args = append(args, "--status", statusVal)
 		}
 		if prioVal, ok := argsMap["priority"].(string); ok && prioVal != "" {
+			if !validPriorities[prioVal] {
+				return mcp.ErrorResult(fmt.Sprintf("Invalid priority filter: %s", prioVal))
+			}
 			args = append(args, "--priority", prioVal)
 		}
 		if jsonVal, ok := argsMap["json"].(bool); ok && jsonVal {
@@ -287,6 +337,9 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		if id == "" {
 			return mcp.ErrorResult("Missing required argument 'id'")
 		}
+		if err := sanitizePositionalArg(id); err != nil {
+			return mcp.ErrorResult(fmt.Sprintf("Invalid id argument: %v", err))
+		}
 		args = append(args, "show", id)
 		if jsonVal, ok := argsMap["json"].(bool); ok && jsonVal {
 			args = append(args, "--json")
@@ -294,20 +347,35 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 
 	case "bd_create":
 		title, _ := argsMap["title"].(string)
-		if title == "" {
+		if strings.TrimSpace(title) == "" {
 			return mcp.ErrorResult("Missing required argument 'title'")
+		}
+		if strings.ContainsAny(title, "\x00\r\n") {
+			return mcp.ErrorResult("Argument 'title' contains forbidden control characters")
 		}
 		args = append(args, "create", title)
 		if typeVal, ok := argsMap["type"].(string); ok && typeVal != "" {
+			if !validTypes[typeVal] {
+				return mcp.ErrorResult(fmt.Sprintf("Invalid type parameter: %s", typeVal))
+			}
 			args = append(args, "--type", typeVal)
 		}
 		if prioVal, ok := argsMap["priority"].(string); ok && prioVal != "" {
+			if !validPriorities[prioVal] {
+				return mcp.ErrorResult(fmt.Sprintf("Invalid priority parameter: %s", prioVal))
+			}
 			args = append(args, "--priority", prioVal)
 		}
 		if descVal, ok := argsMap["description"].(string); ok && descVal != "" {
+			if strings.Contains(descVal, "\x00") {
+				return mcp.ErrorResult("Argument 'description' contains null byte")
+			}
 			args = append(args, "--description", descVal)
 		}
 		if parentVal, ok := argsMap["parent"].(string); ok && parentVal != "" {
+			if err := sanitizePositionalArg(parentVal); err != nil {
+				return mcp.ErrorResult(fmt.Sprintf("Invalid parent argument: %v", err))
+			}
 			args = append(args, "--parent", parentVal)
 		}
 
@@ -316,6 +384,9 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		if id == "" {
 			return mcp.ErrorResult("Missing required argument 'id'")
 		}
+		if err := sanitizePositionalArg(id); err != nil {
+			return mcp.ErrorResult(fmt.Sprintf("Invalid id argument: %v", err))
+		}
 		args = append(args, "update", id, "--claim")
 
 	case "bd_close":
@@ -323,8 +394,14 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		if id == "" {
 			return mcp.ErrorResult("Missing required argument 'id'")
 		}
+		if err := sanitizePositionalArg(id); err != nil {
+			return mcp.ErrorResult(fmt.Sprintf("Invalid id argument: %v", err))
+		}
 		args = append(args, "close", id)
 		if reasonVal, ok := argsMap["reason"].(string); ok && reasonVal != "" {
+			if strings.Contains(reasonVal, "\x00") {
+				return mcp.ErrorResult("Argument 'reason' contains null byte")
+			}
 			args = append(args, "--reason", reasonVal)
 		}
 

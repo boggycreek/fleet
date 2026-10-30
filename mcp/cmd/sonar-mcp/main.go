@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
@@ -124,6 +125,22 @@ func NewMCPServer(client *sonar.Client, r io.Reader, w io.Writer) *MCPServer {
 	return s
 }
 
+var (
+	validSeverities = map[string]bool{"BLOCKER": true, "CRITICAL": true, "MAJOR": true, "MINOR": true, "INFO": true}
+	validIssueTypes = map[string]bool{"BUG": true, "VULNERABILITY": true, "CODE_SMELL": true, "SECURITY_HOTSPOT": true}
+)
+
+func validateProjectKey(key string) error {
+	trimmed := strings.TrimSpace(key)
+	if trimmed == "" {
+		return fmt.Errorf("project_key cannot be empty")
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n\x00") || strings.Contains(trimmed, "..") {
+		return fmt.Errorf("project_key contains forbidden characters or whitespace: %q", key)
+	}
+	return nil
+}
+
 func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) mcp.CallToolResult {
 	args := params.ParseArguments()
 
@@ -138,10 +155,10 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 
 	case "sonar_quality_gate":
 		projectKey, _ := args["project_key"].(string)
-		if projectKey == "" {
-			return mcp.ErrorResult("Missing required argument 'project_key'")
+		if err := validateProjectKey(projectKey); err != nil {
+			return mcp.ErrorResult(fmt.Sprintf("Invalid project_key: %v", err))
 		}
-		qg, err := s.sonarClient.GetProjectQualityGate(ctx, projectKey)
+		qg, err := s.sonarClient.GetProjectQualityGate(ctx, strings.TrimSpace(projectKey))
 		if err != nil {
 			return mcp.ErrorResult(fmt.Sprintf("Error retrieving quality gate: %v", err))
 		}
@@ -150,12 +167,24 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 
 	case "sonar_issues":
 		projectKey, _ := args["project_key"].(string)
-		if projectKey == "" {
-			return mcp.ErrorResult("Missing required argument 'project_key'")
+		if err := validateProjectKey(projectKey); err != nil {
+			return mcp.ErrorResult(fmt.Sprintf("Invalid project_key: %v", err))
 		}
 		severity, _ := args["severity"].(string)
+		if severity != "" {
+			severity = strings.ToUpper(strings.TrimSpace(severity))
+			if !validSeverities[severity] {
+				return mcp.ErrorResult(fmt.Sprintf("Invalid severity parameter: %s", severity))
+			}
+		}
 		issueType, _ := args["issue_type"].(string)
-		issues, err := s.sonarClient.GetIssues(ctx, projectKey, severity, issueType)
+		if issueType != "" {
+			issueType = strings.ToUpper(strings.TrimSpace(issueType))
+			if !validIssueTypes[issueType] {
+				return mcp.ErrorResult(fmt.Sprintf("Invalid issue_type parameter: %s", issueType))
+			}
+		}
+		issues, err := s.sonarClient.GetIssues(ctx, strings.TrimSpace(projectKey), severity, issueType)
 		if err != nil {
 			return mcp.ErrorResult(fmt.Sprintf("Error querying issues: %v", err))
 		}
@@ -164,14 +193,14 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 
 	case "sonar_measures":
 		projectKey, _ := args["project_key"].(string)
-		if projectKey == "" {
-			return mcp.ErrorResult("Missing required argument 'project_key'")
+		if err := validateProjectKey(projectKey); err != nil {
+			return mcp.ErrorResult(fmt.Sprintf("Invalid project_key: %v", err))
 		}
 		metricKeysStr, _ := args["metric_keys"].(string)
 		var metricKeys []string
 		if metricKeysStr != "" {
 			for _, m := range strings.Split(metricKeysStr, ",") {
-				if t := strings.TrimSpace(m); t != "" {
+				if t := strings.TrimSpace(m); t != "" && !strings.ContainsAny(t, " \t\r\n\x00") {
 					metricKeys = append(metricKeys, t)
 				}
 			}
@@ -179,7 +208,7 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		if len(metricKeys) == 0 {
 			metricKeys = []string{"coverage", "duplicated_lines_density", "cognitive_complexity", "bugs", "vulnerabilities", "code_smells"}
 		}
-		measures, err := s.sonarClient.GetComponentMeasures(ctx, projectKey, metricKeys)
+		measures, err := s.sonarClient.GetComponentMeasures(ctx, strings.TrimSpace(projectKey), metricKeys)
 		if err != nil {
 			return mcp.ErrorResult(fmt.Sprintf("Error querying measures: %v", err))
 		}
@@ -189,13 +218,18 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 	case "sonar_create_project":
 		projectKey, _ := args["project_key"].(string)
 		name, _ := args["name"].(string)
-		if projectKey == "" || name == "" {
-			return mcp.ErrorResult("Missing required arguments 'project_key' and 'name'")
+		if err := validateProjectKey(projectKey); err != nil {
+			return mcp.ErrorResult(fmt.Sprintf("Invalid project_key: %v", err))
 		}
-		if err := s.sonarClient.CreateProject(ctx, projectKey, name); err != nil {
+		if strings.TrimSpace(name) == "" || strings.Contains(name, "\x00") {
+			return mcp.ErrorResult("Missing or invalid argument 'name'")
+		}
+		cleanKey := strings.TrimSpace(projectKey)
+		cleanName := strings.TrimSpace(name)
+		if err := s.sonarClient.CreateProject(ctx, cleanKey, cleanName); err != nil {
 			return mcp.ErrorResult(fmt.Sprintf("Error creating project: %v", err))
 		}
-		return mcp.TextResult(fmt.Sprintf("Project %s (%s) successfully ensured", projectKey, name))
+		return mcp.TextResult(fmt.Sprintf("Project %s (%s) successfully ensured", cleanKey, cleanName))
 
 	default:
 		return mcp.ErrorResult(fmt.Sprintf("Unknown tool: %s", params.Name))
@@ -212,6 +246,11 @@ func Run(ctx context.Context, r io.Reader, w io.Writer) error {
 		sonarURL = "http://127.0.0.1:9000"
 	}
 	sonarToken := os.Getenv("SONAR_TOKEN")
+
+	parsedURL, err := url.Parse(sonarURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return fmt.Errorf("invalid SONAR_HOST_URL scheme: %s (must be http or https)", sonarURL)
+	}
 
 	client := sonar.NewClient(sonar.ClientConfig{
 		BaseURL: sonarURL,

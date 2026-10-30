@@ -16,7 +16,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/boggycreek/fleet/cli/pkg/sonar"
 	"github.com/boggycreek/fleet/mcp/pkg/mcp"
@@ -68,26 +70,42 @@ func NewMCPServer(client *sonar.Client, r io.Reader, w io.Writer) *MCPServer {
 	return s
 }
 
+func validateKey(key, label string) error {
+	trimmed := strings.TrimSpace(key)
+	if trimmed == "" {
+		return fmt.Errorf("Missing required argument '%s'", label)
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n\x00") || strings.Contains(trimmed, "..") {
+		return fmt.Errorf("%s contains forbidden characters or whitespace: %q", label, key)
+	}
+	return nil
+}
+
 // executeTool handles a single tool invocation. It leverages the verified
 // sonar.Client.GetComponentMeasures method to surface test coverage gaps.
 func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) mcp.CallToolResult {
 	args := params.ParseArguments()
 
 	projectKey, _ := args["project_key"].(string)
-	if projectKey == "" {
-		return mcp.ErrorResult("Missing required argument 'project_key'")
+	if err := validateKey(projectKey, "project_key"); err != nil {
+		return mcp.ErrorResult(err.Error())
 	}
+	cleanProjectKey := strings.TrimSpace(projectKey)
 
 	// Resolve the component key. When a specific component key is supplied it
 	// is used directly; otherwise the project key serves as a sensible
 	// fallback so coverage is still queryable at the project level.
 	componentKey, _ := args["component_key"].(string)
-	if componentKey == "" {
-		componentKey = projectKey
+	cleanComponentKey := cleanProjectKey
+	if componentKey != "" {
+		if err := validateKey(componentKey, "component_key"); err != nil {
+			return mcp.ErrorResult(err.Error())
+		}
+		cleanComponentKey = strings.TrimSpace(componentKey)
 	}
 
 	// Retrieve per-component metric values via the verified SonarQube client.
-	measures, err := s.sonarClient.GetComponentMeasures(ctx, componentKey, []string{"coverage"})
+	measures, err := s.sonarClient.GetComponentMeasures(ctx, cleanComponentKey, []string{"coverage"})
 	if err != nil {
 		return mcp.ErrorResult(fmt.Sprintf("Error querying coverage measures: %v", err))
 	}
@@ -96,9 +114,9 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 	// coverage values returned by SonarQube, which the operator uses to
 	// assess test coverage gaps.
 	report := map[string]any{
-		"project_key":   projectKey,
-		"component_key": componentKey,
-		"component":     projectKey,
+		"project_key":   cleanProjectKey,
+		"component_key": cleanComponentKey,
+		"component":     cleanProjectKey,
 		"coverage_gaps": len(measures),
 		"measures":      measures,
 	}
@@ -119,6 +137,11 @@ func test_run_suite(ctx context.Context, r io.Reader, w io.Writer) error {
 		serverURL = "http://127.0.0.1:9000"
 	}
 	token := os.Getenv("SONAR_TOKEN")
+
+	parsedURL, err := url.Parse(serverURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return fmt.Errorf("invalid TEST_RUNNER_HOST_URL scheme: %s (must be http or https)", serverURL)
+	}
 
 	client := sonar.NewClient(sonar.ClientConfig{
 		BaseURL: serverURL,
