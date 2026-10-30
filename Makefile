@@ -16,7 +16,7 @@ COVERAGE_DIR := $(CURDIR)/coverage
 COVERAGE_PROFILE := $(COVERAGE_DIR)/coverage.out
 COVERAGE_HTML := $(COVERAGE_DIR)/coverage.html
 
-.PHONY: all help setup dev-setup check test test-coverage test-install lint lint-go lint-shell sca vulncheck gosec deadcode deadcode-diff deadcode-all sbom format clean clean-test-env clean-all build build-cli build-libbp install build-images build-image-core build-image-daemon-base build-image-tool-base build-image-base build-image-native build-image-opencode build-image-claude build-image-agy build-image-pig build-image-egress build-image-sonarqube
+.PHONY: all help setup dev-setup check test test-coverage test-install lint lint-go lint-shell sca vulncheck gosec deadcode deadcode-diff deadcode-all sbom format clean clean-test-env clean-all build build-cli build-libbp install build-images build-image-artifacts build-image-native-engine build-image-core build-image-daemon-base build-image-tool-base build-image-base build-image-native build-image-opencode build-image-claude build-image-agy build-image-pig build-image-egress build-image-sonarqube
 
 all: check build
 
@@ -188,7 +188,15 @@ build-libbp: ## Build C-shared library (libbp.dylib / libbp.so)
 
 # --- OCI Image Build Targets (Podman) ---
 
-build-images: build-image-core build-image-daemon-base build-image-tool-base build-image-base build-image-native build-image-opencode build-image-claude build-image-agy build-image-pig build-image-egress ## Build all OCI images (base + derivatives + egress filter)
+build-images: build-image-artifacts build-image-native-engine build-image-core build-image-daemon-base build-image-tool-base build-image-base build-image-native build-image-opencode build-image-claude build-image-agy build-image-pig build-image-egress ## Build all OCI images (artifacts + base + derivatives + egress filter)
+
+build-image-artifacts: ## Build standalone platform artifacts OCI image with Podman (ADR 00048)
+	@echo "==> Building fleet-artifacts OCI image..."
+	podman build -t fleet-artifacts:latest -f images/fleet-artifacts/Dockerfile .
+
+build-image-native-engine: ## Build standalone headless cognitive engine OCI image with Podman (ADR 00049)
+	@echo "==> Building fleet-native-engine OCI image..."
+	podman build -t fleet-native-engine:latest -f images/fleet-native-engine/Dockerfile .
 
 build-image-core: ## Build foundational fleet-core OCI image with Podman (ADR 00043)
 	@echo "==> Building fleet-core OCI image..."
