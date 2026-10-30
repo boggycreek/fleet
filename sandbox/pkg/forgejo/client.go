@@ -420,6 +420,34 @@ type FileContent struct {
 	DownloadURL string `json:"download_url,omitempty"`
 }
 
+// CommitStatusState constants for commit status checks
+const (
+	StatePending = "pending"
+	StateSuccess = "success"
+	StateError   = "error"
+	StateFailure = "failure"
+	StateWarning = "warning"
+)
+
+// CommitStatus represents a Forgejo commit status check
+type CommitStatus struct {
+	ID          int64     `json:"id"`
+	State       string    `json:"state"`
+	TargetURL   string    `json:"target_url,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Context     string    `json:"context,omitempty"`
+	URL         string    `json:"url,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
+}
+
+// CreateCommitStatusOptions holds options for posting a commit status
+type CreateCommitStatusOptions struct {
+	State       string `json:"state"`
+	TargetURL   string `json:"target_url,omitempty"`
+	Description string `json:"description,omitempty"`
+	Context     string `json:"context,omitempty"`
+}
+
 // ListIssues returns issues and tasks matching filters from a repository
 func (c *Client) ListIssues(ctx context.Context, owner, repo, state string, page, limit int) ([]*Issue, error) {
 	if owner == "" {
@@ -642,4 +670,42 @@ func (c *Client) GetFile(ctx context.Context, owner, repo, filePath, ref string)
 	}
 
 	return &file, nil
+}
+
+// CreateCommitStatus creates or updates a commit status check on a commit SHA
+func (c *Client) CreateCommitStatus(ctx context.Context, owner, repo, sha string, opt CreateCommitStatusOptions) (*CommitStatus, error) {
+	if owner == "" {
+		owner = "fleet"
+	}
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil, fmt.Errorf("repository name cannot be empty")
+	}
+	sha = strings.TrimSpace(sha)
+	if sha == "" {
+		return nil, fmt.Errorf("commit sha cannot be empty")
+	}
+
+	if opt.State == "" {
+		opt.State = StatePending
+	}
+	if opt.Context == "" {
+		opt.Context = "sonarqube/quality-gate"
+	}
+
+	endpoint := fmt.Sprintf("/repos/%s/%s/statuses/%s", url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	statusCode, respBody, err := c.doRequest(ctx, http.MethodPost, endpoint, opt)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return nil, fmt.Errorf("failed creating commit status for %s/%s@%s (status %d): %s", owner, repo, sha, statusCode, string(respBody))
+	}
+
+	var status CommitStatus
+	if err := json.Unmarshal(respBody, &status); err != nil {
+		return nil, fmt.Errorf("failed unmarshaling commit status response: %w", err)
+	}
+
+	return &status, nil
 }

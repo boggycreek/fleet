@@ -205,6 +205,18 @@ func TestForgejoClientSuite(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"message":"file not found"}`))
 
+		case r.Method == http.MethodPost && path == "/api/v1/repos/fleet/tools/statuses/sha123":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":42,"state":"success","target_url":"http://127.0.0.1:9000/dashboard?id=fleet-tools","description":"Quality Gate passed","context":"sonarqube/quality-gate"}`))
+
+		case r.Method == http.MethodPost && path == "/api/v1/repos/fleet/fail-repo/statuses/sha123":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"message":"commit status error"}`))
+
+		case r.Method == http.MethodPost && path == "/api/v1/repos/fleet/tools/statuses/badjson":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`not valid json`))
+
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -451,6 +463,27 @@ func TestForgejoClientSuite(t *testing.T) {
 		t.Errorf("expected default owner and ref in GetFile to succeed: %v", err)
 	}
 
+	// 12. CreateCommitStatus
+	status, statusErr := client.CreateCommitStatus(ctx, "fleet", "tools", "sha123", CreateCommitStatusOptions{State: StateSuccess})
+	if statusErr != nil || status.ID != 42 || status.State != "success" {
+		t.Errorf("CreateCommitStatus failed: %v, status: %+v", statusErr, status)
+	}
+	if _, err = client.CreateCommitStatus(ctx, "fleet", "", "sha123", CreateCommitStatusOptions{}); err == nil {
+		t.Errorf("expected error on empty repo in CreateCommitStatus")
+	}
+	if _, err = client.CreateCommitStatus(ctx, "fleet", "tools", "", CreateCommitStatusOptions{}); err == nil {
+		t.Errorf("expected error on empty sha in CreateCommitStatus")
+	}
+	if _, err = client.CreateCommitStatus(ctx, "fleet", "fail-repo", "sha123", CreateCommitStatusOptions{}); err == nil {
+		t.Errorf("expected error on fail-repo in CreateCommitStatus")
+	}
+	if _, err = client.CreateCommitStatus(ctx, "fleet", "tools", "badjson", CreateCommitStatusOptions{}); err == nil {
+		t.Errorf("expected error on bad json in CreateCommitStatus")
+	}
+	if _, err = client.CreateCommitStatus(ctx, "", "tools", "sha123", CreateCommitStatusOptions{}); err != nil {
+		t.Errorf("expected default owner and option defaults in CreateCommitStatus to succeed: %v", err)
+	}
+
 	// Network / URL error handling
 	badClient := NewClient(ClientConfig{BaseURL: "http://127.0.0.1:64999", Timeout: 10 * time.Millisecond})
 	_ = badClient.EnsureUser(ctx, "test", "pass", "")
@@ -464,4 +497,5 @@ func TestForgejoClientSuite(t *testing.T) {
 	_, _ = badClient.GetPullRequest(ctx, "fleet", "tools", 1)
 	_, _ = badClient.ReviewPullRequest(ctx, "fleet", "tools", 1, "APPROVE", "")
 	_, _ = badClient.GetFile(ctx, "fleet", "tools", "README.md", "main")
+	_, _ = badClient.CreateCommitStatus(ctx, "fleet", "tools", "sha123", CreateCommitStatusOptions{})
 }

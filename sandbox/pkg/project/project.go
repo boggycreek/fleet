@@ -561,6 +561,30 @@ func (m *Manager) DoctorAll(ctx context.Context) ([]*DoctorReport, error) {
 	return reports, nil
 }
 
+// PostCommitStatus evaluates Quality Gate for sonarKey and posts the commit status to Forgejo.
+func (m *Manager) PostCommitStatus(ctx context.Context, org, repo, sha, sonarKey string) (*forgejo.CommitStatus, error) {
+	org = strings.TrimSpace(org)
+	if org == "" {
+		org = config.GetDefaultProjectOrg()
+	}
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil, fmt.Errorf("repository name cannot be empty")
+	}
+	sha = strings.TrimSpace(sha)
+	if sha == "" {
+		return nil, fmt.Errorf("commit sha cannot be empty")
+	}
+
+	sonarKey = strings.TrimSpace(sonarKey)
+	if sonarKey == "" {
+		sonarKey = fmt.Sprintf("%s-%s", org, repo)
+	}
+
+	qg, _ := m.sonarClient.GetProjectQualityGate(ctx, sonarKey)
+	return sonar.DispatchQualityGateStatus(ctx, m.forgejoClient, org, repo, sha, m.sonarBase, sonarKey, qg)
+}
+
 // resolveScanStatus converts SonarQube Quality Gate status to user-facing strings.
 func (m *Manager) resolveScanStatus(ctx context.Context, sonarKey string) string {
 	qg, err := m.sonarClient.GetProjectQualityGate(ctx, sonarKey)
@@ -583,9 +607,10 @@ func (m *Manager) resolveScanStatus(ctx context.Context, sonarKey string) string
 
 // FormatList formats a list of projects according to user-requested terminal width layout:
 // ● <org> / <project>
-//     Gitea:       <url>
-//     SonarQube:   <url>
-//     Scan Status: <status>
+//
+//	Gitea:       <url>
+//	SonarQube:   <url>
+//	Scan Status: <status>
 func FormatList(projects []*Project) string {
 	if len(projects) == 0 {
 		return "No projects registered. Create one with 'fleet project create <name>'."

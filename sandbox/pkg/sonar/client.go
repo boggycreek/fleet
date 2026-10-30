@@ -335,4 +335,3 @@ func (c *Client) authenticate(req *http.Request) {
 		req.SetBasicAuth(c.adminUser, c.adminPass)
 	}
 }
-
