@@ -168,6 +168,9 @@ All code changes in this repository must adhere to the following standards:
    - For unit tests that use `t.TempDir()`, register a cleanup hook with `t.Cleanup(func() { _ = exec.Command("podman", "unshare", "rm", "-rf", tmpDir).Run() })` to prevent subuid permission errors when removing test containers/storage.
    - Comprehensive integration tests belong in `test/integration/`.
 
+6. **Subagent Delegation Preference**:
+   - Long-running tasks, deep research, code reviews, and background implementation workflows should be delegated to subagents so the primary conversation loop remains responsive and unoccupied for ongoing user interaction.
+
 ---
 
 ## Helpful Commands
