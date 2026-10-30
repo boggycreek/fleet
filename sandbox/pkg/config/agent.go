@@ -180,8 +180,16 @@ func SaveAgentConfig(cfg *AgentConfig, paths Paths) error {
 	}
 
 	keyPath := filepath.Join(agentSecretDir, "signing-key.pem")
-	if err := os.WriteFile(keyPath, []byte(cfg.SigningKeyPEM), 0600); err != nil {
-		return err
+	skipKeyWrite := false
+	if cfg.SigningKeyPEM == "" {
+		if fi, err := os.Stat(keyPath); err == nil && fi.Size() > 0 {
+			skipKeyWrite = true
+		}
+	}
+	if !skipKeyWrite {
+		if err := os.WriteFile(keyPath, []byte(cfg.SigningKeyPEM), 0600); err != nil {
+			return err
+		}
 	}
 
 	// Write BP profile .env in StateDir/bp/profiles/<name>.env if directory is configured

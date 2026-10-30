@@ -107,6 +107,8 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	os.Setenv("ADMIN_BACKPLANE_PASSWORD", "mockpass")
 	os.Setenv("BP_HOST", "127.0.0.1")
 	os.Setenv("BP_PORT", fmt.Sprintf("%d", vkPort))
+	os.Setenv("SONAR_HOST_URL", "http://127.0.0.1:65505")
+	os.Setenv("FORGEJO_URL", "http://127.0.0.1:65506")
 
 	paths := config.Paths{
 		DataHome:      filepath.Join(tmpDir, "data"),
@@ -259,10 +261,11 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	}))
 	defer giteaServer.Close()
 
+	os.Setenv("FORGEJO_URL", giteaServer.URL)
 	os.Setenv("GITEA_URL", giteaServer.URL)
 	_ = os.WriteFile(paths.SSHPrivateKey+".pub", []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA mock-ide-key"), 0644)
 	reportGitea := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealGitea(ctx, cfg, paths, reportGitea)
+	checkAndHealForgejo(ctx, cfg, paths, reportGitea)
 	if len(reportGitea.Checks) == 0 || reportGitea.Checks[0].Status != StatusOK {
 		t.Errorf("expected Gitea check OK, got %+v", reportGitea.Checks)
 	}
@@ -270,7 +273,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	// 10. Direct storage, container, host SSH pubkey heal, and signing key tests
 	_ = os.Remove(paths.SSHPrivateKey + ".pub")
 	reportSSHPub := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealHostSSH(paths, reportSSHPub)
+	checkAndHealHostSSH(ctx, paths, reportSSHPub)
 
 	reportDirect := &DoctorReport{AgentName: "heal-agent"}
 	checkAndHealPodmanStorage(ctx, cfg, reportDirect)
@@ -325,7 +328,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	_ = os.WriteFile(keyPath, []byte("bad-pem-data"), 0600)
 	cfg.SigningKeyPEM = ""
 	reportKey := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealSigningKey(cfg, paths, reportKey)
+	checkAndHealSigningKey(ctx, cfg, paths, reportKey)
 	if reportKey.UnrepairableCount == 0 || len(reportKey.Checks) == 0 || reportKey.Checks[0].Status != StatusError || !reportKey.Checks[0].Unrepairable {
 		t.Errorf("expected corrupt key to be reported as unrepairable error")
 	}
@@ -338,7 +341,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	// Test missing signing key
 	_ = os.Remove(keyPath)
 	reportMissing := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealSigningKey(cfg, paths, reportMissing)
+	checkAndHealSigningKey(ctx, cfg, paths, reportMissing)
 	if reportMissing.UnrepairableCount == 0 || len(reportMissing.Checks) == 0 || reportMissing.Checks[0].Status != StatusError || !reportMissing.Checks[0].Unrepairable {
 		t.Errorf("expected missing key to be reported as unrepairable error")
 	}
@@ -346,7 +349,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	// Test empty signing key
 	_ = os.WriteFile(keyPath, []byte(""), 0600)
 	reportEmpty := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealSigningKey(cfg, paths, reportEmpty)
+	checkAndHealSigningKey(ctx, cfg, paths, reportEmpty)
 	if reportEmpty.UnrepairableCount == 0 || len(reportEmpty.Checks) == 0 || reportEmpty.Checks[0].Status != StatusError || !reportEmpty.Checks[0].Unrepairable {
 		t.Errorf("expected empty key to be reported as unrepairable error")
 	}
@@ -363,7 +366,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 
 	// Run again now that key is valid
 	reportKeyIntact := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealSigningKey(cfg, paths, reportKeyIntact)
+	checkAndHealSigningKey(ctx, cfg, paths, reportKeyIntact)
 	if len(reportKeyIntact.Checks) == 0 || reportKeyIntact.Checks[0].Status != StatusOK {
 		t.Errorf("expected intact signing key to return StatusOK")
 	}
@@ -371,7 +374,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	// Test healing of permissions when key permissions are 0644
 	_ = os.Chmod(keyPath, 0644)
 	reportKeyPerm := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealSigningKey(cfg, paths, reportKeyPerm)
+	checkAndHealSigningKey(ctx, cfg, paths, reportKeyPerm)
 	if reportKeyPerm.HealedCount == 0 || reportKeyPerm.Checks[0].Status != StatusHealed {
 		t.Errorf("expected permission auto-healing for signing key")
 	}
@@ -383,7 +386,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	cfg.SigningKeyPEM = ""
 	cfg.PublicKeyB64 = ""
 	reportKeySync := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealSigningKey(cfg, paths, reportKeySync)
+	checkAndHealSigningKey(ctx, cfg, paths, reportKeySync)
 	if reportKeySync.HealedCount == 0 || cfg.SigningKeyPEM == "" || cfg.PublicKeyB64 == "" {
 		t.Errorf("expected config synchronization from valid key file")
 	}
@@ -393,7 +396,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	cfg.SigningKeyPEM = ""
 	cfg.PublicKeyB64 = ""
 	reportBoth := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealSigningKey(cfg, paths, reportBoth)
+	checkAndHealSigningKey(ctx, cfg, paths, reportBoth)
 	if reportBoth.HealedCount == 0 || !strings.Contains(reportBoth.Checks[0].Message, "and synchronized config") {
 		t.Errorf("expected combined permission heal and config sync")
 	}
@@ -433,7 +436,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	agentCfgPath := filepath.Join(paths.AgentsDir, fmt.Sprintf("%s.json", cfg.Name))
 	_ = os.Chmod(agentCfgPath, 0644)
 	reportCfgPerm := &DoctorReport{AgentName: "heal-agent"}
-	_, _ = checkAndHealConfig(paths, cfg.Name, reportCfgPerm)
+	_, _ = checkAndHealConfig(ctx, paths, cfg.Name, reportCfgPerm)
 	if reportCfgPerm.HealedCount == 0 {
 		t.Errorf("expected permission auto-healing for agent config JSON")
 	}
@@ -444,7 +447,7 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 	dataMissing, _ := json.Marshal(cfgMissingFields)
 	_ = os.WriteFile(cfgMissingPath, dataMissing, 0600)
 	reportMissingFields := &DoctorReport{AgentName: "missing-fields-agent"}
-	repairedCfg, _ := checkAndHealConfig(paths, "missing-fields-agent", reportMissingFields)
+	repairedCfg, _ := checkAndHealConfig(ctx, paths, "missing-fields-agent", reportMissingFields)
 	if repairedCfg == nil || repairedCfg.ContainerName == "" || repairedCfg.VolumeName == "" || repairedCfg.Image == "" {
 		t.Errorf("expected missing container/volume/image fields to be healed")
 	}
@@ -454,9 +457,10 @@ func TestDoctorDiagnosticsAndHealing(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer giteaErrServer.Close()
+	os.Setenv("FORGEJO_URL", giteaErrServer.URL)
 	os.Setenv("GITEA_URL", giteaErrServer.URL)
 	reportErr := &DoctorReport{AgentName: "heal-agent"}
-	checkAndHealGitea(ctx, cfg, paths, reportErr)
+	checkAndHealForgejo(ctx, cfg, paths, reportErr)
 	if reportErr.WarningCount == 0 {
 		t.Errorf("expected warning for 500 server error in Gitea check")
 	}
@@ -519,6 +523,8 @@ func TestInfraDoctorDiagnosticsAndHealing(t *testing.T) {
 	os.Setenv("ADMIN_BACKPLANE_PASSWORD", "mockpass")
 	os.Setenv("BP_HOST", "127.0.0.1")
 	os.Setenv("BP_PORT", fmt.Sprintf("%d", vkPort))
+	os.Setenv("SONAR_HOST_URL", "http://127.0.0.1:65505")
+	os.Setenv("FORGEJO_URL", "http://127.0.0.1:65506")
 	os.Setenv("POSTGRES_HOST", "127.0.0.1")
 	os.Setenv("POSTGRES_PORT", fmt.Sprintf("%d", pgPort))
 
@@ -591,6 +597,7 @@ func TestInfraDoctorDiagnosticsAndHealing(t *testing.T) {
 		_, _ = w.Write([]byte(`{"version":"1.22.0"}`))
 	}))
 	defer giteaServer.Close()
+	os.Setenv("FORGEJO_URL", giteaServer.URL)
 	os.Setenv("GITEA_URL", giteaServer.URL)
 	checkAndHealGiteaContainer(ctx, paths, report2)
 
@@ -904,10 +911,12 @@ func TestCheckAndHealHostSSH_PassphraseProtected(t *testing.T) {
 	}
 
 	// Check that checkAndHealHostSSH does not hang
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	report := &DoctorReport{AgentName: "test-agent"}
 	done := make(chan struct{})
 	go func() {
-		checkAndHealHostSSH(paths, report)
+		checkAndHealHostSSH(ctx, paths, report)
 		close(done)
 	}()
 

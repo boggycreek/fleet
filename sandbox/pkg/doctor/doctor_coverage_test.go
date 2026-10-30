@@ -50,8 +50,9 @@ func TestDoctor_HostSSH_PubkeyRegeneration(t *testing.T) {
 	}
 	_ = paths.EnsureDirectories()
 
+	ctx := context.Background()
 	report := &DoctorReport{AgentName: "ssh-regen-agent"}
-	checkAndHealHostSSH(paths, report)
+	checkAndHealHostSSH(ctx, paths, report)
 
 	if _, err := os.Stat(pubPath); err != nil {
 		t.Errorf("expected regenerated pubkey at %s, got: %v", pubPath, err)
@@ -70,7 +71,7 @@ func TestDoctor_HostSSH_PubkeyRegeneration(t *testing.T) {
 	}
 	_ = pathsEmptySSH.EnsureDirectories()
 	report2 := &DoctorReport{AgentName: "ssh-empty-agent"}
-	checkAndHealHostSSH(pathsEmptySSH, report2)
+	checkAndHealHostSSH(ctx, pathsEmptySSH, report2)
 	if len(report2.Checks) == 0 || (report2.Checks[0].Status != StatusOK && report2.Checks[0].Status != StatusHealed) {
 		t.Errorf("expected StatusOK or StatusHealed with IDEKeyFile fallback, got %+v", report2.Checks)
 	}
@@ -402,11 +403,12 @@ func TestDoctor_BackplaneProfile_Coverage(t *testing.T) {
 		Name:     "bp-prof-agent",
 		Password: "bp-password",
 	}
+	ctx := context.Background()
 
 	t.Run("EmptyProfileDir", func(t *testing.T) {
 		paths := config.Paths{BPProfilesDir: ""}
 		report := &DoctorReport{AgentName: cfg.Name}
-		checkAndHealBPProfile(cfg, paths, report)
+		checkAndHealBPProfile(ctx, cfg, paths, report)
 		if len(report.Checks) != 0 {
 			t.Errorf("expected no checks when BPProfilesDir is empty")
 		}
@@ -424,7 +426,7 @@ func TestDoctor_BackplaneProfile_Coverage(t *testing.T) {
 			SecretsDir:    filepath.Join(tmpDir, "secrets"),
 		}
 		report := &DoctorReport{AgentName: cfg.Name}
-		checkAndHealBPProfile(cfg, paths, report)
+		checkAndHealBPProfile(ctx, cfg, paths, report)
 
 		if report.UnrepairableCount == 0 {
 			t.Errorf("expected unrepairable error when writing profile fails")
@@ -438,7 +440,7 @@ func TestDoctor_BackplaneProfile_Coverage(t *testing.T) {
 			SecretsDir:    filepath.Join(tmpDir, "secrets"),
 		}
 		report := &DoctorReport{AgentName: cfg.Name}
-		checkAndHealBPProfile(cfg, paths, report)
+		checkAndHealBPProfile(ctx, cfg, paths, report)
 
 		if report.HealedCount == 0 {
 			t.Errorf("expected profile rebuild when missing")
@@ -464,7 +466,7 @@ func TestDoctor_BackplaneProfile_Coverage(t *testing.T) {
 		_ = os.WriteFile(profilePath, []byte(expectedContent), 0644)
 
 		report := &DoctorReport{AgentName: cfg.Name}
-		checkAndHealBPProfile(cfg, paths, report)
+		checkAndHealBPProfile(ctx, cfg, paths, report)
 
 		if report.HealedCount == 0 {
 			t.Errorf("expected permission auto-healing for backplane profile")
@@ -475,7 +477,7 @@ func TestDoctor_BackplaneProfile_Coverage(t *testing.T) {
 
 		// Run again: profile intact and mode 0600 -> StatusOK
 		reportOK := &DoctorReport{AgentName: cfg.Name}
-		checkAndHealBPProfile(cfg, paths, reportOK)
+		checkAndHealBPProfile(ctx, cfg, paths, reportOK)
 		if len(reportOK.Checks) == 0 || reportOK.Checks[0].Status != StatusOK {
 			t.Errorf("expected StatusOK for intact profile, got %+v", reportOK.Checks)
 		}

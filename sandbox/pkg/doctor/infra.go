@@ -44,7 +44,7 @@ func DiagnoseAndHealInfra(ctx context.Context, paths config.Paths) (*DoctorRepor
 	checkAndHealInfraEnv(paths, report)
 
 	// 2. Host SSH Keypair & Include Directive
-	checkAndHealHostSSH(paths, report)
+	checkAndHealHostSSH(ctx, paths, report)
 
 	// 3. Infrastructure Storage Volumes & Network
 	checkAndHealInfraStorage(ctx, report)
