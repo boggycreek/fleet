@@ -311,3 +311,37 @@ func TestSaveAgentConfig_BPProfilesAndErrors(t *testing.T) {
 		t.Errorf("expected SaveAgentConfig to fail when jsonPath is a directory")
 	}
 }
+
+func TestSaveAgentConfig_DoNotOverwriteSigningKeyWhenEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := Paths{
+		DataHome:   filepath.Join(tmpDir, "data"),
+		AgentsDir:  filepath.Join(tmpDir, "data", "agents"),
+		SecretsDir: filepath.Join(tmpDir, "data", "secrets"),
+	}
+	_ = paths.EnsureDirectories()
+
+	cfg, err := NewAgentConfig("preserve-key", "base", "coder")
+	if err != nil {
+		t.Fatalf("failed creating agent config: %v", err)
+	}
+	originalKey := cfg.SigningKeyPEM
+	if err := SaveAgentConfig(cfg, paths); err != nil {
+		t.Fatalf("first SaveAgentConfig failed: %v", err)
+	}
+
+	keyPath := filepath.Join(paths.SecretsDir, cfg.Name, "signing-key.pem")
+	if data, err := os.ReadFile(keyPath); err != nil || string(data) != originalKey {
+		t.Fatalf("expected key to match original, got %s, err=%v", string(data), err)
+	}
+
+	// Now empty SigningKeyPEM and call SaveAgentConfig again; existing key must NOT be overwritten
+	cfg.SigningKeyPEM = ""
+	if err := SaveAgentConfig(cfg, paths); err != nil {
+		t.Fatalf("second SaveAgentConfig failed: %v", err)
+	}
+
+	if data, err := os.ReadFile(keyPath); err != nil || string(data) != originalKey {
+		t.Errorf("expected signing-key.pem to be preserved with non-empty content, got: %s (err: %v)", string(data), err)
+	}
+}
