@@ -31,10 +31,13 @@ ensure_initialized() {
         cd "${TASKS_DIR}"
         git init -b main >/dev/null 2>&1 || git init >/dev/null 2>&1
         git remote add origin "${REPO_URL}" >/dev/null 2>&1 || true
-        git config user.name "${AGENT_NAME:-agent}"
-        git config user.email "${AGENT_NAME:-agent}@local.fleet"
       )
     fi
+  fi
+
+  if [ -d "${TASKS_DIR}/.git" ]; then
+    git -C "${TASKS_DIR}" config --local user.name "${AGENT_NAME:-agent}" >/dev/null 2>&1 || true
+    git -C "${TASKS_DIR}" config --local user.email "${AGENT_NAME:-agent}@local.sndbx" >/dev/null 2>&1 || true
   fi
 
   if [ ! -d "${TASKS_DIR}/.beads" ]; then
