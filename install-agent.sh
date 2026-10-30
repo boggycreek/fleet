@@ -14,6 +14,7 @@ DEFAULT_NAME="__FLEET_AGENT_NAME__"
 ENROLL_SERVER="${ENROLL_SERVER:-$DEFAULT_SERVER}"
 ENROLL_TOKEN="${ENROLL_TOKEN:-$DEFAULT_TOKEN}"
 AGENT_NAME="${AGENT_NAME:-$DEFAULT_NAME}"
+TARGET_USER="${TARGET_USER:-}"
 
 usage() {
     cat <<EOF
@@ -25,6 +26,7 @@ Options:
   --server <url>     Enrollment server base URL (e.g. http://192.168.1.100:8765)
   --token <token>    One-time secret enrollment token
   --name <name>      Target agent name
+  --user <user>      Target username when running as root/sudo (default: agent name)
   -h, --help         Show this help message
 EOF
     exit 1
@@ -42,6 +44,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --name)
             AGENT_NAME="$2"
+            shift 2
+            ;;
+        --user)
+            TARGET_USER="$2"
             shift 2
             ;;
         -h|--help)
@@ -67,6 +73,54 @@ fi
 if [[ -z "$AGENT_NAME" || "$AGENT_NAME" == "__FLEET_AGENT_NAME__" ]]; then
     echo "Error: --name is required" >&2
     exit 1
+fi
+
+# 0. If running as root (e.g. 'curl ... | sudo bash'), auto-provision the dedicated user
+if [[ "${EUID}" -eq 0 ]]; then
+    TARGET_USER="${TARGET_USER:-$AGENT_NAME}"
+    echo "==> Running as root/sudo: auto-provisioning dedicated user '${TARGET_USER}'..."
+
+    if ! id -u "${TARGET_USER}" >/dev/null 2>&1; then
+        echo "==> Creating system user '${TARGET_USER}'..."
+        useradd -m -s /bin/bash -c "Fleet Autonomous Agent (${AGENT_NAME})" "${TARGET_USER}"
+    fi
+
+    USER_HOME=$(getent passwd "${TARGET_USER}" | cut -d: -f6)
+    chmod 0700 "${USER_HOME}"
+
+    # Copy authorized_keys from SUDO_USER so operator can SSH & attach IDEs directly
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        SUDO_HOME=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
+        if [[ -f "${SUDO_HOME}/.ssh/authorized_keys" ]]; then
+            mkdir -p "${USER_HOME}/.ssh"
+            cp "${SUDO_HOME}/.ssh/authorized_keys" "${USER_HOME}/.ssh/authorized_keys"
+            chmod 0700 "${USER_HOME}/.ssh"
+            chmod 0600 "${USER_HOME}/.ssh/authorized_keys"
+            chown -R "${TARGET_USER}:${TARGET_USER}" "${USER_HOME}/.ssh"
+            echo "==> Copied authorized SSH keys from '${SUDO_USER}' to '${TARGET_USER}'"
+        fi
+    fi
+
+    # Enable systemd user lingering for headless background operation
+    if command -v loginctl >/dev/null 2>&1; then
+        echo "==> Enabling systemd user lingering for '${TARGET_USER}'..."
+        loginctl enable-linger "${TARGET_USER}" || true
+    fi
+
+    # Materialize script to a temporary executable to run under target user
+    TMP_SCRIPT="/tmp/fleet-install-$$.sh"
+    if [[ -f "$0" ]]; then
+        cp "$0" "${TMP_SCRIPT}"
+    else
+        curl -sSf "${ENROLL_SERVER}/install/${AGENT_NAME}?token=${ENROLL_TOKEN}" -o "${TMP_SCRIPT}"
+    fi
+    chmod 0755 "${TMP_SCRIPT}"
+    chown "${TARGET_USER}:${TARGET_USER}" "${TMP_SCRIPT}"
+
+    echo "==> Dropping privileges to '${TARGET_USER}' to complete userspace setup..."
+    su - "${TARGET_USER}" -c "${TMP_SCRIPT} --server '${ENROLL_SERVER}' --token '${ENROLL_TOKEN}' --name '${AGENT_NAME}'"
+    rm -f "${TMP_SCRIPT}"
+    exit 0
 fi
 
 echo "==> Enrolling Fleet agent '${AGENT_NAME}' from controller at ${ENROLL_SERVER}..."

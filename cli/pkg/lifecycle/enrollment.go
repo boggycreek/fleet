@@ -535,6 +535,37 @@ DEFAULT_NAME="__FLEET_AGENT_NAME__"
 ENROLL_SERVER="${ENROLL_SERVER:-$DEFAULT_SERVER}"
 ENROLL_TOKEN="${ENROLL_TOKEN:-$DEFAULT_TOKEN}"
 AGENT_NAME="${AGENT_NAME:-$DEFAULT_NAME}"
+TARGET_USER="${TARGET_USER:-$AGENT_NAME}"
+
+if [[ "${EUID}" -eq 0 ]]; then
+    echo "==> Running as root/sudo: auto-provisioning dedicated user '${TARGET_USER}'..."
+    if ! id -u "${TARGET_USER}" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash -c "Fleet Autonomous Agent (${AGENT_NAME})" "${TARGET_USER}"
+    fi
+    USER_HOME=$(getent passwd "${TARGET_USER}" | cut -d: -f6)
+    chmod 0700 "${USER_HOME}"
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        SUDO_HOME=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
+        if [[ -f "${SUDO_HOME}/.ssh/authorized_keys" ]]; then
+            mkdir -p "${USER_HOME}/.ssh"
+            cp "${SUDO_HOME}/.ssh/authorized_keys" "${USER_HOME}/.ssh/authorized_keys"
+            chmod 0700 "${USER_HOME}/.ssh"
+            chmod 0600 "${USER_HOME}/.ssh/authorized_keys"
+            chown -R "${TARGET_USER}:${TARGET_USER}" "${USER_HOME}/.ssh"
+        fi
+    fi
+    if command -v loginctl >/dev/null 2>&1; then
+        loginctl enable-linger "${TARGET_USER}" || true
+    fi
+    TMP_SCRIPT="/tmp/fleet-install-$$.sh"
+    curl -sSf "${ENROLL_SERVER}/install/${AGENT_NAME}?token=${ENROLL_TOKEN}" -o "${TMP_SCRIPT}"
+    chmod 0755 "${TMP_SCRIPT}"
+    chown "${TARGET_USER}:${TARGET_USER}" "${TMP_SCRIPT}"
+    su - "${TARGET_USER}" -c "${TMP_SCRIPT} --server '${ENROLL_SERVER}' --token '${ENROLL_TOKEN}' --name '${AGENT_NAME}'"
+    rm -f "${TMP_SCRIPT}"
+    exit 0
+fi
+
 BIN_DIR="${HOME}/.local/bin"
 CONFIG_DIR="${HOME}/.config/fleet"
 SYSTEMD_DIR="${HOME}/.config/systemd/user"
