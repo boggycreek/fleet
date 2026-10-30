@@ -22,6 +22,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[Valkey Pub/Sub Evaluation](valkey-pubsub-evaluation.md)** (`fleet-valkey-pubsub-evaluation`): Trade-off evaluation, hybrid push-wakeup architecture, Sharded Pub/Sub, ACL security, and roadmap for backplane push notifications.
 - **[Server-Side Valkey Stream Guard Evaluation](valkey-stream-guard-evaluation.md)** (`fleet-valkey-stream-guard-evaluation`): Comparative evaluation of server-side Go proxy sidecar vs. native C module for RESP wire-level inspection and DoS protection (ADR 00054).
 - **[Podman Pod Co-location Evaluation](podman-pod-colocation.md)** (`fleet-podman-pod-colocation`): Architectural evaluation and operational guide for Podman pod co-location of agent containers and companion sidecars (ADR 00053).
+- **[128k KV Cache Scaling Guide](kv-cache-128k-scaling.md)** (`fleet-kv-cache-128k-scaling`): VRAM allocation models, llama-server flags, multi-agent topology selection, and prefix caching dynamics.
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.
