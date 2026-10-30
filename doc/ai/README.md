@@ -18,6 +18,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[Adversarial Review & Critic Protocol](adversarial-review.md)** (`fleet-adversarial-review`): Dual-agent adversarial review, hypothesis generation, and critic verification to eliminate hallucinations.
 - **[Language-Specific Best Practices](language-best-practices.md)** (`fleet-language-best-practices`): Language-specific engineering best practices and conventions for Go, Python, TypeScript/Node.js, Shell/Bash, and Rust.
 - **[OpenClaw Concurrency Evaluation](openclaw-concurrency-patterns.md)** (`fleet-openclaw-evaluation`): Comparative architectural analysis of OpenClaw cognitive/concurrency patterns against Fleet's native Go agent runtime (ADR 00041).
+- **[Memory Subsystem Specification & Architecture](memory-subsystem-spec.md)** (`fleet-memory-subsystem-spec`): Standardizing agent cognitive memory across Fleet and Lokol platforms, 5 cognitive pillars, 3-tier progressive disclosure, MCP contracts, and sync strategy.
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.
