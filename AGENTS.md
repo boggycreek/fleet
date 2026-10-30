@@ -27,7 +27,7 @@ fleet/
 │   ├── cmd/beads-mcp/      # Beads task tracking MCP server
 │   ├── cmd/gitea-mcp/      # Forgejo/Gitea REST API MCP server
 │   └── cmd/sonar-mcp/      # SonarQube Quality Gate MCP server
-├── sandbox/                # Host management CLI & runtime module (go.mod)
+├── cli/                    # Host management CLI & runtime module (go.mod)
 │   ├── cmd/fleet/          # Host CLI entrypoint (fleet / ft)
 │   ├── pkg/
 │   │   ├── config/         # Path resolution, environment loading, agent config
@@ -42,7 +42,7 @@ fleet/
 │   └── test/               # Embedded Valkey harness and integration tests
 ├── images/                 # OCI container image build contexts
 ├── doc/
-│   ├── adr/                # Architecture Decision Records (00001 - 00046)
+│   ├── adr/                # Architecture Decision Records (00001 - 00059)
 │   └── ai/                 # Progressive disclosure knowledge base optimized for AI agents
 ├── install.sh              # Host installation & bootstrap script
 ├── setup.sh                # Multi-platform development environment setup & diagnostic script

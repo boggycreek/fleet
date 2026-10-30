@@ -6,7 +6,7 @@ COPY go.work ./
 COPY agent/ ./agent/
 COPY backplane/ ./backplane/
 COPY mcp/ ./mcp/
-COPY sandbox/ ./sandbox/
+COPY cli/ ./cli/
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /build/bp ./backplane/cmd/bp && \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /build/bp-mcp ./mcp/cmd/bp-mcp && \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /build/forgejo-mcp ./mcp/cmd/forgejo-mcp && \

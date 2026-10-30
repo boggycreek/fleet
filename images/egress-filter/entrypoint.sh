@@ -65,6 +65,10 @@ iptables -A INPUT -p tcp --dport 53 -j ACCEPT
 iptables -A OUTPUT -p udp --sport 53 -j ACCEPT
 iptables -A OUTPUT -p tcp --sport 53 -j ACCEPT
 
+# Allow inbound DNS replies from upstream resolvers
+iptables -A INPUT -p udp --sport 53 -j ACCEPT
+iptables -A INPUT -p tcp --sport 53 -j ACCEPT
+
 # Allow outbound DNS to upstream resolvers (1.1.1.1:53, 8.8.8.8:53, and local bridge DNS)
 iptables -A OUTPUT -p udp -d 1.1.1.1 --dport 53 -j ACCEPT
 iptables -A OUTPUT -p tcp -d 1.1.1.1 --dport 53 -j ACCEPT

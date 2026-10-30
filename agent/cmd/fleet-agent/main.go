@@ -21,11 +21,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/boggycreek/sandbox/agent/pkg/engine"
-	"github.com/boggycreek/sandbox/agent/pkg/gateway"
-	"github.com/boggycreek/sandbox/agent/pkg/runtime"
-	"github.com/boggycreek/sandbox/agent/pkg/tools"
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/agent/pkg/engine"
+	"github.com/boggycreek/fleet/agent/pkg/gateway"
+	"github.com/boggycreek/fleet/agent/pkg/runtime"
+	"github.com/boggycreek/fleet/agent/pkg/tools"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
 )
 
 // Config encapsulates runtime parameters for fleet-agent.

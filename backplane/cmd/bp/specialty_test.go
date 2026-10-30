@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp/resp"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp/resp"
 )
 
 type mockSpecialtyServer struct {

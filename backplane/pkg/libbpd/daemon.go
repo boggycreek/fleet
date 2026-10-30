@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
 )
 
 var defaultAgentRunnerPath = "/usr/local/bin/agent-runner"

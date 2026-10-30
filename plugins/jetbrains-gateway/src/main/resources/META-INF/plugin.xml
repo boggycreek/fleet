@@ -2,10 +2,10 @@
 <!-- Use of this source code is governed by an MIT-style -->
 <!-- license that can be found in the LICENSE file. -->
 <idea-plugin>
-    <id>com.boggycreek.sndbx.gateway</id>
-    <name>Agent Sandbox Gateway</name>
+    <id>com.boggycreek.fleet.gateway</id>
+    <name>Fleet Gateway</name>
     <version>0.1.0-alpha</version>
-    <vendor email="support@boggycreek.com" url="https://github.com/boggycreek/sandbox">Boggy Creek Software LLC</vendor>
+    <vendor email="support@boggycreek.com" url="https://github.com/boggycreek/fleet">Boggy Creek Software LLC</vendor>
 
     <description><![CDATA[
       Direct JetBrains Gateway and Toolbox integration for Agent Sandbox.<br>

@@ -29,13 +29,13 @@ dependencies {
 
 intellijPlatform {
     pluginConfiguration {
-        id = "com.boggycreek.sndbx.gateway"
-        name = "Agent Sandbox Gateway"
+        id = "com.boggycreek.fleet.gateway"
+        name = "Fleet Gateway"
         version = project.version.toString()
         vendor {
             name = "Boggy Creek Software LLC"
             email = "support@boggycreek.com"
-            url = "https://github.com/boggycreek/sandbox"
+            url = "https://github.com/boggycreek/fleet"
         }
     }
 }

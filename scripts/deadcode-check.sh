@@ -82,7 +82,7 @@ if [ "${MODE}" = "diff" ]; then
   echo "${CHANGED_FILES}" | sed 's/^/  • /'
 
   # Run deadcode analysis with -test to find truly dead/unreachable code
-  DEAD_JSON="$("${DEADCODE_BIN}" -json -test ./backplane/... ./mcp/... ./sandbox/... 2>/dev/null || true)"
+  DEAD_JSON="$("${DEADCODE_BIN}" -json -test ./agent/... ./backplane/... ./mcp/... ./cli/... 2>/dev/null || true)"
 
   if [ -z "${DEAD_JSON}" ] || [ "${DEAD_JSON}" = "[]" ] || [ "${DEAD_JSON}" = "null" ]; then
     echo "==> [PASS] No unreachable dead code introduced by changes."
@@ -132,7 +132,7 @@ elif [ "${MODE}" = "all" ]; then
   echo
 
   echo "--- [1/2] True Dead Code (Unused by Binaries AND Tests) ---"
-  TRUE_DEAD_OUTPUT="$("${DEADCODE_BIN}" -test ./backplane/... ./mcp/... ./sandbox/... 2>&1 || true)"
+  TRUE_DEAD_OUTPUT="$("${DEADCODE_BIN}" -test ./agent/... ./backplane/... ./mcp/... ./cli/... 2>&1 || true)"
   if [ -z "${TRUE_DEAD_OUTPUT}" ]; then
     echo "  [✓] None. Codebase is 100% clean of completely unreachable code."
   else
@@ -142,7 +142,7 @@ elif [ "${MODE}" = "all" ]; then
   echo
 
   echo "--- [2/2] Library Code Unreached by Binary Entrypoints (cmd/fleet, cmd/bp) ---"
-  BINARY_DEAD_OUTPUT="$("${DEADCODE_BIN}" ./backplane/... ./mcp/... ./sandbox/... 2>&1 || true)"
+  BINARY_DEAD_OUTPUT="$("${DEADCODE_BIN}" ./agent/... ./backplane/... ./mcp/... ./cli/... 2>&1 || true)"
   if [ -z "${BINARY_DEAD_OUTPUT}" ]; then
     echo "  [✓] All package functions are reachable from binary entrypoints."
   else

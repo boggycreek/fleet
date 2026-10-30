@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
-	"github.com/boggycreek/sandbox/backplane/test/harness"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/backplane/test/harness"
 )
 
 func TestRunCLIHelpAndValidation(t *testing.T) {

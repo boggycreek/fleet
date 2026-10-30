@@ -18,8 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/boggycreek/sandbox/agent/pkg/runtime"
-	"github.com/boggycreek/sandbox/mcp/pkg/mcp"
+	"github.com/boggycreek/fleet/agent/pkg/runtime"
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 type safeBuffer struct {

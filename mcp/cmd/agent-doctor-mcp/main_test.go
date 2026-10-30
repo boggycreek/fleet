@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boggycreek/sandbox/backplane/pkg/libbp"
-	"github.com/boggycreek/sandbox/mcp/pkg/mcp"
+	"github.com/boggycreek/fleet/backplane/pkg/libbp"
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 type mockBPClient struct {
