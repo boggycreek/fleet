@@ -54,6 +54,8 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Enables interactive host-connected agent containers to bind the operator's current working directory directly into /home/agent/workspace using Podman user namespace mapping (--userns=keep-id), ensuring zero file ownership or permission drift on the physical host.
 - **[00045 — Node Version Manager (NVM) Scoped to Agent Persistent Home](00045-NodeVersionManagerInAgentHome.md)**  
   *Executive Summary:* Adopts Node Version Manager (NVM) scoped to the unprivileged agent's persistent home directory (/home/agent/.nvm) with the greatest LTS release pre-installed as default. Decoupled from OCI image creation, allowing the operator and agent to manage and switch Node versions dynamically without rebuilding OCI images. Supersedes ADR 00026.
+- **[00049 — Composable Headless Native Agent Cognitive Engine Artifact Layer](00049-ComposableHeadlessNativeAgentCognitiveEngineArtifactLayer.md)**
+  *Executive Summary:* Establishes a dedicated, zero-dependency static cognitive engine artifact OCI image (`fleet-native-engine:latest`) containing the headless `fleet-agent` cognitive daemon and native entrypoints for zero-friction composition into any developer toolchain base image.
 
 ### Agent Lifecycle & Process Model (`THEME-LIFECYCLE`)
 - **[00007 — Agent Lifecycle Phase Separation](00007-AgentLifecyclePhaseSeparation.md)**  
