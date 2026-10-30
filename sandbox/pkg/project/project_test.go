@@ -73,6 +73,10 @@ func setupMockServers(t *testing.T) (*httptest.Server, *httptest.Server, *forgej
 	forgejoMux.HandleFunc("/api/v1/repos/factory/missing-repo", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
+	forgejoMux.HandleFunc("/api/v1/repos/factory/app/statuses/sha123", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":100,"state":"success","description":"Quality Gate passed"}`))
+	})
 
 	// SonarQube endpoints
 	sonarMux.HandleFunc("/api/projects/create", func(w http.ResponseWriter, r *http.Request) {
@@ -203,6 +207,21 @@ func TestProjectLifecycle(t *testing.T) {
 	}
 	if emptyOutput := FormatList(emptyList); !strings.Contains(emptyOutput, "No projects registered") {
 		t.Errorf("expected No projects registered message: %s", emptyOutput)
+	}
+
+	// 9. PostCommitStatus
+	status, statusErr := mgr.PostCommitStatus(ctx, "factory", "app", "sha123", "factory-passed")
+	if statusErr != nil || status.State != "success" {
+		t.Fatalf("PostCommitStatus failed: %v, status: %+v", statusErr, status)
+	}
+	if _, err := mgr.PostCommitStatus(ctx, "factory", "", "sha123", "factory-passed"); err == nil {
+		t.Fatal("expected error on empty repo in PostCommitStatus")
+	}
+	if _, err := mgr.PostCommitStatus(ctx, "factory", "app", "", "factory-passed"); err == nil {
+		t.Fatal("expected error on empty sha in PostCommitStatus")
+	}
+	if _, err := mgr.PostCommitStatus(ctx, "", "app", "sha123", ""); err != nil {
+		t.Fatalf("expected default org and sonarKey in PostCommitStatus to succeed: %v", err)
 	}
 }
 

@@ -501,4 +501,3 @@ func TestGenerateProjectToken(t *testing.T) {
 		t.Fatal("expected error on bad request, got nil")
 	}
 }
-
