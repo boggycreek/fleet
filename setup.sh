@@ -206,7 +206,7 @@ run_cmd() {
 }
 
 run_privileged() {
-  if [ -n "${SUDO}" ]; then
+  if [ -n "${SUDO:-}" ]; then
     run_cmd sudo "$@"
   else
     run_cmd "$@"
@@ -283,7 +283,7 @@ install_xdg_go() {
     echo "  Downloading official Go ${ver} from ${url}..."
 
     local tmp_dir
-    tmp_dir="$(mktemp -d)"
+    tmp_dir="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/go-install.XXXXXX")"
 
     if [ "${DRY_RUN}" = true ]; then
       echo "  [DRY-RUN] curl -sSL -f -o ${tmp_dir}/${tarball} ${url}"
@@ -758,6 +758,9 @@ case "${PKG_MGR}" in
   brew)
     echo "  Configuring Homebrew environment..."
     export HOMEBREW_NO_AUTO_UPDATE=1
+    if [ "${NON_INTERACTIVE}" = true ]; then
+      export NONINTERACTIVE=1
+    fi
 
     if ! xcode-select -p >/dev/null 2>&1; then
       echo "  Installing Xcode Command Line Tools..."
@@ -779,6 +782,7 @@ case "${PKG_MGR}" in
   missing_brew)
     echo "  ⚠️  Homebrew (brew) is not installed on macOS."
     echo "  Please install Homebrew by running:"
+    # shellcheck disable=SC2016
     echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
     echo "  Then re-run ./setup.sh"
     exit 1
@@ -786,7 +790,10 @@ case "${PKG_MGR}" in
 
   apt)
     echo "  Updating APT package lists..."
-    if [ -n "${SUDO}" ] || [ "$(id -u)" -eq 0 ]; then
+    if [ "${NON_INTERACTIVE}" = true ]; then
+      export DEBIAN_FRONTEND=noninteractive
+    fi
+    if [ -n "${SUDO:-}" ] || [ "$(id -u)" -eq 0 ]; then
       run_privileged apt-get update -y
       APT_PACKAGES=(curl git make build-essential pkg-config tar gzip ca-certificates shellcheck)
       if [ "${SKIP_CMAKE}" = false ]; then
@@ -846,7 +853,7 @@ if [ "${SKIP_BEADS}" = false ]; then
     BEADS_TARBALL="beads_${BEADS_VER}_${OS}_${ARCH}.tar.gz"
     BEADS_URL="https://github.com/gastownhall/beads/releases/download/v${BEADS_VER}/${BEADS_TARBALL}"
 
-    TMP_BEADS="$(mktemp -d)"
+    TMP_BEADS="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/beads-install.XXXXXX")"
 
     if [ "${DRY_RUN}" = true ]; then
       echo "  [DRY-RUN] curl -sSL -f -o ${TMP_BEADS}/${BEADS_TARBALL} ${BEADS_URL}"
@@ -955,7 +962,9 @@ if [ ! -f "${REPO_ROOT}/.env" ]; then
   if [ "${DRY_RUN}" = true ]; then
     echo "  [DRY-RUN] Write ${REPO_ROOT}/.env"
   else
-    cat > "${REPO_ROOT}/.env" <<EOF
+    (
+      umask 077
+      cat > "${REPO_ROOT}/.env" <<EOF
 # Local Development Environment Overrides
 HUMAN_NAME=${USER:-developer}
 ADMIN_BACKPLANE_PASSWORD=dev_admin_password_insecure
@@ -965,6 +974,7 @@ HUMAN_BACKPLANE_PASSWORD=dev_human_password_insecure
 BP_HOST=localhost
 BP_PORT=6379
 EOF
+    )
     chmod 600 "${REPO_ROOT}/.env"
     echo "  ✓ Created ${REPO_ROOT}/.env"
   fi
@@ -976,7 +986,7 @@ if ! [ -x "${ACTIVE_GO_BIN}" ] && command -v go >/dev/null 2>&1; then
   ACTIVE_GO_BIN="$(command -v go)"
 fi
 
-if [ -x "${ACTIVE_GO_BIN}" ] && ([ -f "${REPO_ROOT}/go.work" ] || [ -f "${REPO_ROOT}/go.mod" ]); then
+if [ -x "${ACTIVE_GO_BIN}" ] && { [ -f "${REPO_ROOT}/go.work" ] || [ -f "${REPO_ROOT}/go.mod" ]; }; then
   if [ -f "${REPO_ROOT}/go.work" ]; then
     echo "  Synchronizing Go workspace dependencies (${ACTIVE_GO_BIN} work sync)..."
     if [ "${DRY_RUN}" = true ]; then

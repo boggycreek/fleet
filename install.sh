@@ -167,7 +167,7 @@ echo
 echo "[4/6] Setting up fleet repository..."
 
 # Determine if we are running from an existing local clone or via piped curl
-CURRENT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+CURRENT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || echo "")"
 
 if [ -n "${CURRENT_SCRIPT_DIR}" ] && [ -d "${CURRENT_SCRIPT_DIR}/.git" ]; then
   # Executing directly from within a local git repository clone
@@ -235,23 +235,27 @@ INCLUDE_DIRECTIVE="Include ${MANAGED_SSH_CONFIG}"
 if [ -f "${SSH_USER_CONFIG}" ]; then
   if ! grep -qF "${MANAGED_SSH_CONFIG}" "${SSH_USER_CONFIG}"; then
     echo "  Adding Include directive for Fleet to ${SSH_USER_CONFIG}"
-    TMP_CONFIG="$(mktemp)"
+    TMP_CONFIG="$(umask 077 && mktemp "${TMPDIR:-/tmp}/fleet-ssh.XXXXXX")"
     {
       echo "# Fleet Host Include"
       echo "${INCLUDE_DIRECTIVE}"
       echo ""
       cat "${SSH_USER_CONFIG}"
     } > "${TMP_CONFIG}"
+    chmod 600 "${TMP_CONFIG}"
     mv "${TMP_CONFIG}" "${SSH_USER_CONFIG}"
     chmod 600 "${SSH_USER_CONFIG}"
   fi
 else
   echo "  Creating ${SSH_USER_CONFIG} with Fleet Include directive"
-  {
-    echo "# OpenSSH Configuration"
-    echo "# Fleet Host Include"
-    echo "${INCLUDE_DIRECTIVE}"
-  } > "${SSH_USER_CONFIG}"
+  (
+    umask 077
+    {
+      echo "# OpenSSH Configuration"
+      echo "# Fleet Host Include"
+      echo "${INCLUDE_DIRECTIVE}"
+    } > "${SSH_USER_CONFIG}"
+  )
   chmod 600 "${SSH_USER_CONFIG}"
 fi
 
@@ -273,7 +277,9 @@ if [ ! -f "${ENV_FILE}" ]; then
     HUMAN_PW="$(od -vN 16 -An -tx1 /dev/urandom | tr -d ' \n')"
   fi
 
-  cat > "${ENV_FILE}" <<EOF
+  (
+    umask 077
+    cat > "${ENV_FILE}" <<EOF
 # Fleet Environment Configuration
 # Generated for ${OS_PRETTY} (${OS}/${ARCH})
 
@@ -290,6 +296,7 @@ SONAR_ADMIN_PASSWORD=Admin_${ADMIN_PW}
 # OPENAI_API_KEY=
 # GH_TOKEN=
 EOF
+  )
   chmod 600 "${ENV_FILE}"
 else
   echo "  Existing configuration file found at ${ENV_FILE}"
@@ -321,17 +328,48 @@ INSTALLED_PREBUILT=true
 RELEASE_URL_BASE="https://github.com/boggycreek/fleet/releases/latest/download"
 
 echo "  Checking for prebuilt native CLI binaries from GitHub Releases..."
-for bin_name in fleet bp bpd sonar-mcp; do
-  target_file="${BIN_DIR}/${bin_name}"
-  download_url="${RELEASE_URL_BASE}/${bin_name}-${OS}-${ARCH}"
-  if curl -fsSL "${download_url}" -o "${target_file}.tmp" 2>/dev/null; then
-    mv "${target_file}.tmp" "${target_file}"
-    chmod +x "${target_file}"
-  else
-    rm -f "${target_file}.tmp"
-    INSTALLED_PREBUILT=false
-  fi
-done
+CHECKSUM_FILE="$(umask 077 && mktemp "${TMPDIR:-/tmp}/fleet-checksums.XXXXXX")"
+if curl -fsSL "${RELEASE_URL_BASE}/checksums.txt" -o "${CHECKSUM_FILE}" 2>/dev/null; then
+  for bin_name in fleet bp bpd sonar-mcp; do
+    target_file="${BIN_DIR}/${bin_name}"
+    remote_asset="${bin_name}-${OS}-${ARCH}"
+    download_url="${RELEASE_URL_BASE}/${remote_asset}"
+
+    expected_sha256="$(grep -E "(^| )${remote_asset}\$" "${CHECKSUM_FILE}" | awk '{print $1}' || echo "")"
+    if [ -z "${expected_sha256}" ]; then
+      echo "  Warning: Checksum for ${remote_asset} not found in release checksums.txt"
+      INSTALLED_PREBUILT=false
+      break
+    fi
+
+    if curl -fsSL "${download_url}" -o "${target_file}.tmp" 2>/dev/null; then
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual_sha256="$(sha256sum "${target_file}.tmp" | awk '{print $1}')"
+      elif command -v shasum >/dev/null 2>&1; then
+        actual_sha256="$(shasum -a 256 "${target_file}.tmp" | awk '{print $1}')"
+      else
+        actual_sha256=""
+      fi
+
+      if [ -n "${actual_sha256}" ] && [ "${actual_sha256}" = "${expected_sha256}" ]; then
+        mv "${target_file}.tmp" "${target_file}"
+        chmod +x "${target_file}"
+      else
+        echo "  Warning: Checksum mismatch for ${remote_asset} (expected ${expected_sha256}, got ${actual_sha256})"
+        rm -f "${target_file}.tmp"
+        INSTALLED_PREBUILT=false
+        break
+      fi
+    else
+      rm -f "${target_file}.tmp"
+      INSTALLED_PREBUILT=false
+      break
+    fi
+  done
+else
+  INSTALLED_PREBUILT=false
+fi
+rm -f "${CHECKSUM_FILE}"
 
 if [ "${INSTALLED_PREBUILT}" = "true" ] && [ -f "${FLEET_BIN}" ]; then
   echo "  Installed prebuilt native CLI binaries (fleet, bp, bpd, sonar-mcp) from GitHub Releases."
