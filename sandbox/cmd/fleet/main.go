@@ -69,6 +69,11 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 		defer cancel()
 		return handlePlugin(pluginCtx, paths, domainArgs, stdout, stderr)
 
+	case "image":
+		imageCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
+		defer cancel()
+		return handleImage(imageCtx, paths, domainArgs, stdout, stderr)
+
 	case "update":
 		updateTimeout := 30 * time.Minute
 		envTimeout := os.Getenv("FLEET_UPDATE_TIMEOUT")
@@ -114,6 +119,7 @@ Usage:
 
 Domains:
   agent       Manage agent instance provisioning and container lifecycles
+  image       Generate, build, list, and manage custom Fleet OCI images
   project     Manage and link Forgejo repositories and SonarQube projects
   infra       Manage shared Valkey, Forgejo, and PostgreSQL infrastructure
   plugin      Install and manage IDE plugins (JetBrains Gateway/Toolbox, VS Code)
@@ -149,6 +155,12 @@ Infra Commands:
   %s infra info [--show-secrets] [--json]
   %s infra doctor
 
+Image Commands:
+  %s image list [--json]
+  %s image generate [--engine <type>] [--output <path>] [--devcontainer <path>]
+  %s image build <name> [--engine <type>] [--dockerfile <path>] [--context <path>]
+  %s image remove <name>
+
 Plugin Commands:
   %s plugin add <gateway|toolbox|vscode>
   %s plugin remove <gateway|toolbox|vscode>
@@ -158,5 +170,5 @@ Update Command:
   %s update
 
 Run '%s <domain> help' for more details on each command.
-`, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin)
+`, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin)
 }
