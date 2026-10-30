@@ -345,3 +345,44 @@ func TestSaveAgentConfig_DoNotOverwriteSigningKeyWhenEmpty(t *testing.T) {
 		t.Errorf("expected signing-key.pem to be preserved with non-empty content, got: %s (err: %v)", string(data), err)
 	}
 }
+
+func TestOpenRouterKeyAndURLResolution(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := Paths{
+		DataHome:   filepath.Join(tmpDir, "data"),
+		SecretsDir: filepath.Join(tmpDir, "data", "secrets"),
+	}
+	_ = paths.EnsureDirectories()
+
+	// 1. Test NormalizeModelURL
+	if norm := NormalizeModelURL("openrouter"); norm != "http://fleet-openrouter:8080/v1" {
+		t.Errorf("expected http://fleet-openrouter:8080/v1, got %s", norm)
+	}
+	if norm := NormalizeModelURL("http://openrouter"); norm != "http://fleet-openrouter:8080/v1" {
+		t.Errorf("expected http://fleet-openrouter:8080/v1, got %s", norm)
+	}
+	if norm := NormalizeModelURL("http://localhost:11434/v1"); norm != "http://localhost:11434/v1" {
+		t.Errorf("expected original URL preserved, got %s", norm)
+	}
+
+	// 2. Test GetOpenRouterAPIKey when empty
+	t.Setenv("OPENROUTER_API_KEY", "")
+	if key := GetOpenRouterAPIKey(paths); key != "" {
+		t.Errorf("expected empty key, got %q", key)
+	}
+
+	// 3. Test GetOpenRouterAPIKey from env
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-env-key-1234")
+	if key := GetOpenRouterAPIKey(paths); key != "sk-or-env-key-1234" {
+		t.Errorf("expected env key, got %q", key)
+	}
+
+	// 4. Test GetOpenRouterAPIKey from secrets file override
+	keyFile := filepath.Join(paths.SecretsDir, "openrouter.key")
+	if err := os.WriteFile(keyFile, []byte("  sk-or-file-key-5678 \n"), 0600); err != nil {
+		t.Fatalf("failed to write openrouter.key: %v", err)
+	}
+	if key := paths.GetOpenRouterAPIKey(); key != "sk-or-file-key-5678" {
+		t.Errorf("expected file key to take precedence, got %q", key)
+	}
+}

@@ -90,6 +90,18 @@ func (c *AgentConfig) IsHost() bool {
 	return c.IsNoContainer() || c.IsHostContainer()
 }
 
+// NormalizeModelURL normalizes dynamic or shortcut model URLs such as "openrouter" to canonical endpoints.
+func NormalizeModelURL(input string) string {
+	clean := strings.TrimSpace(input)
+	lower := strings.ToLower(clean)
+	if lower == "openrouter" || lower == "http://openrouter" || lower == "https://openrouter" ||
+		lower == "openrouter/v1" || lower == "http://openrouter/v1" || lower == "https://openrouter/v1" ||
+		lower == "http://fleet-openrouter/v1" || lower == "fleet-openrouter" {
+		return "http://fleet-openrouter:8080/v1"
+	}
+	return clean
+}
+
 // ResolveImage returns the canonical OCI image name for a given input or preset
 func ResolveImage(input string) string {
 	lower := strings.ToLower(strings.TrimSpace(input))
@@ -132,7 +144,7 @@ func NewAgentConfig(name, imageInput, role string, modelOpts ...string) (*AgentC
 
 	var modelURL, modelName, modelAPIKey string
 	if len(modelOpts) > 0 {
-		modelURL = strings.TrimSpace(modelOpts[0])
+		modelURL = NormalizeModelURL(modelOpts[0])
 	}
 	if len(modelOpts) > 1 {
 		modelName = strings.TrimSpace(modelOpts[1])

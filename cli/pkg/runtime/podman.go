@@ -31,12 +31,13 @@ const EgressImage = "fleet-egress:latest"
 // infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, and infraSonarContainer are the expected shared infra container names.
 // These are package-level vars so tests can override them with ephemeral container names.
 var (
-	infraValkeyContainer   = "fleet-valkey"
-	infraForgejoContainer  = "fleet-forgejo"
-	infraGiteaContainer    = infraForgejoContainer
-	infraPostgresContainer = "fleet-postgres"
-	infraSonarContainer    = "fleet-sonarqube"
-	infraNetwork           = "fleet-infra"
+	infraValkeyContainer     = "fleet-valkey"
+	infraForgejoContainer    = "fleet-forgejo"
+	infraGiteaContainer      = infraForgejoContainer
+	infraPostgresContainer   = "fleet-postgres"
+	infraSonarContainer      = "fleet-sonarqube"
+	infraOpenRouterContainer = "fleet-openrouter"
+	infraNetwork             = "fleet-infra"
 )
 
 // SetInfraNetworkForTest overrides infraNetwork for unit testing.
@@ -75,6 +76,15 @@ func SetInfraForgejoContainerForTest(name string) func() {
 	return func() {
 		infraForgejoContainer = orig
 		infraGiteaContainer = origGitea
+	}
+}
+
+// SetInfraOpenRouterContainerForTest overrides infraOpenRouterContainer for unit testing.
+func SetInfraOpenRouterContainerForTest(name string) func() {
+	orig := infraOpenRouterContainer
+	infraOpenRouterContainer = name
+	return func() {
+		infraOpenRouterContainer = orig
 	}
 }
 
@@ -1177,6 +1187,9 @@ user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~sp
 		}
 	}
 
+	// 6. Start OpenRouter proxy container if key is present
+	_ = StartOpenRouterContainer(ctx, paths)
+
 	// 5. Start SonarQube container if image exists and not already running
 	sonarContainer := infraSonarContainer
 	sonarArgs := []string{
@@ -1426,12 +1439,13 @@ func StopInfraStack(ctx context.Context) error {
 	_ = CommandContext(ctx, "podman", "stop", "agent-sandbox-gitea").Run()
 	_ = CommandContext(ctx, "podman", "stop", infraPostgresContainer).Run()
 	_ = CommandContext(ctx, "podman", "stop", infraSonarContainer).Run()
+	_ = CommandContext(ctx, "podman", "stop", infraOpenRouterContainer).Run()
 	return nil
 }
 
 // InspectInfraStack returns the runtime state of Valkey, Forgejo, PostgreSQL, and SonarQube containers
 func InspectInfraStack(ctx context.Context) ([]ContainerInfo, error) {
-	containers := []string{infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, infraSonarContainer}
+	containers := []string{infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, infraSonarContainer, infraOpenRouterContainer}
 	var results []ContainerInfo
 	for _, c := range containers {
 		info, err := InspectAgentContainer(ctx, c)
@@ -1505,6 +1519,62 @@ func SyncSSHConfigFile(ctx context.Context, paths config.Paths) error {
 // UpdateSSHConfig updates the managed SSH config file (alias for SyncSSHConfigFile).
 func UpdateSSHConfig(ctx context.Context, paths config.Paths) error {
 	return SyncSSHConfigFile(ctx, paths)
+}
+
+// StartOpenRouterContainer starts or creates the dedicated fleet-openrouter-proxy container on fleet-infra
+func StartOpenRouterContainer(ctx context.Context, paths config.Paths) error {
+	apiKey := config.GetOpenRouterAPIKey(paths)
+	if apiKey == "" {
+		return nil
+	}
+
+	netName := infraNetwork
+	if err := EnsureNetwork(ctx, netName); err != nil {
+		return fmt.Errorf("failed ensuring network %s: %w", netName, err)
+	}
+
+	ctrName := infraOpenRouterContainer
+	args := []string{
+		"run", "-d",
+		"--name", ctrName,
+		"--hostname", ctrName,
+		"--network", netName,
+		"-p", "127.0.0.1:8080:8080",
+		"-e", "OPENROUTER_API_KEY",
+		"fleet-openrouter-proxy:latest",
+	}
+
+	checkCmd := CommandContext(ctx, "podman", "container", "exists", ctrName)
+	if err := checkCmd.Run(); err != nil {
+		cmd := CommandContext(ctx, "podman", args...)
+		cmd.Env = append(cmd.Environ(), fmt.Sprintf("OPENROUTER_API_KEY=%s", apiKey))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			if IsRootlessNetnsError(err, out) {
+				_ = EnsureRootlessNetNS(ctx)
+				retryCmd := CommandContext(ctx, "podman", args...)
+				retryCmd.Env = append(retryCmd.Environ(), fmt.Sprintf("OPENROUTER_API_KEY=%s", apiKey))
+				if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
+					return fmt.Errorf("failed starting openrouter container: %v (%s)", retryErr, string(retryOut))
+				}
+			} else {
+				return fmt.Errorf("failed starting openrouter container: %v (%s)", err, string(out))
+			}
+		}
+	} else {
+		startCmd := CommandContext(ctx, "podman", "start", ctrName)
+		if startOut, err := startCmd.CombinedOutput(); err != nil {
+			_ = CommandContext(ctx, "podman", "rm", "-f", ctrName).Run()
+			if IsRootlessNetnsError(err, startOut) {
+				_ = EnsureRootlessNetNS(ctx)
+			}
+			cmd := CommandContext(ctx, "podman", args...)
+			cmd.Env = append(cmd.Environ(), fmt.Sprintf("OPENROUTER_API_KEY=%s", apiKey))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed restarting openrouter container: %v (%s)", err, string(out))
+			}
+		}
+	}
+	return nil
 }
 
 // RecreateValkeyContainer stops, removes, and recreates the shared Valkey container with updated ACL and volume mounts.

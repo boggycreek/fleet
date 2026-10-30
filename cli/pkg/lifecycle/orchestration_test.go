@@ -18,6 +18,7 @@ import (
 
 	"github.com/boggycreek/fleet/backplane/test/harness"
 	"github.com/boggycreek/fleet/cli/pkg/config"
+	"github.com/boggycreek/fleet/cli/pkg/runtime"
 )
 
 func TestProvisionAgentAndDeprovisionAgentHappyPath(t *testing.T) {
@@ -141,6 +142,11 @@ func TestProvisionAgentAndDeprovisionAgentOfflineServices(t *testing.T) {
 		// #nosec G204 -- test cleanup hook
 		_ = exec.Command("podman", "unshare", "rm", "-rf", tmpDir).Run()
 	})
+
+	restorePodman := runtime.SetDefaultExecutor(runtime.CommandExecutorFunc(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.Command("true")
+	}))
+	defer restorePodman()
 
 	paths := config.Paths{
 		DataHome:      filepath.Join(tmpDir, "data"),

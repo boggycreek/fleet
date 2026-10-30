@@ -16,7 +16,7 @@ COVERAGE_DIR := $(CURDIR)/coverage
 COVERAGE_PROFILE := $(COVERAGE_DIR)/coverage.out
 COVERAGE_HTML := $(COVERAGE_DIR)/coverage.html
 
-.PHONY: all help setup dev-setup check test test-coverage test-install lint lint-go lint-shell sca vulncheck gosec deadcode deadcode-diff deadcode-all sbom format clean clean-test-env clean-all build build-cli build-libbp install build-images build-image-artifacts build-image-native-engine build-image-core build-image-daemon-base build-image-tool-base build-image-base build-image-native build-image-opencode build-image-claude build-image-agy build-image-pig build-image-egress build-image-sonarqube
+.PHONY: all help setup dev-setup check test test-coverage test-install lint lint-go lint-shell sca vulncheck gosec deadcode deadcode-diff deadcode-all sbom format clean clean-test-env clean-all build build-cli build-libbp install build-images build-image-artifacts build-image-native-engine build-image-core build-image-daemon-base build-image-tool-base build-image-base build-image-native build-image-opencode build-image-claude build-image-agy build-image-pig build-image-egress build-image-sonarqube build-image-openrouter-proxy
 
 all: check build
 
@@ -152,6 +152,7 @@ build-cli: ## Build native Go CLI binaries (fleet, bp, bpd, mcps)
 		ln -sf forgejo-mcp $(BIN_DIR)/gitea-mcp; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/beads-mcp ./mcp/cmd/beads-mcp; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/sonar-mcp ./mcp/cmd/sonar-mcp; \
+		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/fleet-openrouter-proxy ./sandbox/cmd/fleet-openrouter-proxy; \
 		echo "Binaries built in $(BIN_DIR)/ (alias: $(BIN_DIR)/ft)"; \
 	else \
 		echo "Notice: go.work not yet initialized. Skipping build."; \
@@ -188,7 +189,7 @@ build-libbp: ## Build C-shared library (libbp.dylib / libbp.so)
 
 # --- OCI Image Build Targets (Podman) ---
 
-build-images: build-image-artifacts build-image-native-engine build-image-core build-image-daemon-base build-image-tool-base build-image-base build-image-native build-image-opencode build-image-claude build-image-agy build-image-pig build-image-egress ## Build all OCI images (artifacts + base + derivatives + egress filter)
+build-images: build-image-artifacts build-image-native-engine build-image-core build-image-daemon-base build-image-tool-base build-image-base build-image-native build-image-opencode build-image-claude build-image-agy build-image-pig build-image-egress build-image-openrouter-proxy ## Build all OCI images (artifacts + base + derivatives + egress filter + openrouter proxy)
 
 build-image-artifacts: ## Build standalone platform artifacts OCI image with Podman (ADR 00048)
 	@echo "==> Building fleet-artifacts OCI image..."
@@ -239,6 +240,10 @@ build-image-egress: ## Build fleet-egress OCI image with Podman
 build-image-sonarqube: ## Build SonarQube Server Community Edition OCI image with Podman
 	@echo "==> Building fleet-sonarqube OCI image..."
 	@./scripts/build-sonarqube-image.sh
+
+build-image-openrouter-proxy: ## Build fleet-openrouter-proxy OCI image with Podman
+	@echo "==> Building fleet-openrouter-proxy OCI image..."
+	podman build -t fleet-openrouter-proxy:latest -f images/infra/openrouter-proxy/Dockerfile .
 
 clean: ## Clean build and test coverage artifacts
 	@rm -rf $(BIN_DIR) $(DIST_DIR) $(COVERAGE_DIR)

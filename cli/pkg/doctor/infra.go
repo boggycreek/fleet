@@ -43,6 +43,9 @@ func DiagnoseAndHealInfra(ctx context.Context, paths config.Paths) (*DoctorRepor
 	// 7. SonarQube Mechanical Analysis Container & Service
 	checkAndHealSonarContainer(ctx, paths, report)
 
+	// 8. OpenRouter Inference Proxy Gateway Container & Service
+	checkAndHealOpenRouterContainer(ctx, paths, report)
+
 	return report, nil
 }
 
