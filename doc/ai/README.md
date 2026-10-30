@@ -17,6 +17,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[Colibri MoE Inference Evaluation](colibri-moe-inference.md)** (`fleet-colibri-evaluation`): Architectural evaluation of Colibri for NVMe-streamed frontier MoE inference on Fleet developer workstations.
 - **[Adversarial Review & Critic Protocol](adversarial-review.md)** (`fleet-adversarial-review`): Dual-agent adversarial review, hypothesis generation, and critic verification to eliminate hallucinations.
 - **[Language-Specific Best Practices](language-best-practices.md)** (`fleet-language-best-practices`): Language-specific engineering best practices and conventions for Go, Python, TypeScript/Node.js, Shell/Bash, and Rust.
+- **[OpenClaw Concurrency Evaluation](openclaw-concurrency-patterns.md)** (`fleet-openclaw-evaluation`): Comparative architectural analysis of OpenClaw cognitive/concurrency patterns against Fleet's native Go agent runtime (ADR 00041).
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.
