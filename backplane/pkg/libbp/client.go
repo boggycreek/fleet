@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/boggycreek/sandbox/backplane/pkg/libbp/resp"
@@ -208,6 +209,7 @@ func (c *Client) execInternal(ctx context.Context, cmd string, args ...string) (
 		return resp.Value{}, ErrClosed
 	}
 	if err := ctx.Err(); err != nil {
+		c.markBroken()
 		return resp.Value{}, err
 	}
 
@@ -247,18 +249,28 @@ func (c *Client) execInternal(ctx context.Context, cmd string, args ...string) (
 		} else {
 			_ = activeConn.SetDeadline(time.Time{})
 		}
+		conn := activeConn
+		var done atomic.Bool
+		var stop func() bool
+		if ctx.Done() != nil {
+			stop = context.AfterFunc(ctx, func() {
+				if !done.Load() {
+					_ = conn.SetDeadline(time.Unix(1, 0))
+				}
+			})
+		}
 		defer func() {
+			done.Store(true)
+			if stop != nil {
+				stop()
+			}
+			if ctx.Err() != nil {
+				c.markBroken()
+			}
 			if !c.isClosed() && !c.isBroken() {
-				_ = activeConn.SetDeadline(time.Time{})
+				_ = conn.SetDeadline(time.Time{})
 			}
 		}()
-
-		if ctx.Done() != nil {
-			stop := context.AfterFunc(ctx, func() {
-				_ = activeConn.SetDeadline(time.Unix(1, 0))
-			})
-			defer stop()
-		}
 	}
 
 	fullCmd := append([]string{cmd}, args...)
@@ -1058,7 +1070,9 @@ func (c *Client) parseXReadResponse(ctx context.Context, val resp.Value) ([]*Mes
 		}
 
 		if lastID != "" {
-			_ = c.SetCursor(ctx, streamName, lastID)
+			if err := c.SetCursor(ctx, streamName, lastID); err != nil {
+				return nil, fmt.Errorf("failed to update cursor for stream %s: %w", streamName, err)
+			}
 		}
 	}
 
@@ -1073,8 +1087,7 @@ func LoadClientFromEnv() ClientConfig {
 	}
 	cfg, err := LoadClientWithProfile(profile)
 	if err != nil {
-		// Fallback to legacy env loading if profile file does not exist
-		return loadClientDirectEnv()
+		return ClientConfig{}
 	}
 	return cfg
 }
@@ -1085,6 +1098,9 @@ func LoadClientWithProfile(profileName string) (ClientConfig, error) {
 	profileName = strings.TrimSpace(profileName)
 	if profileName == "" {
 		profileName = "default"
+	}
+	if filepath.Base(profileName) != profileName || strings.Contains(profileName, "..") {
+		return ClientConfig{}, fmt.Errorf("invalid profile name %q: path traversal not allowed", profileName)
 	}
 
 	// 1. Check fail-closed condition for default profile: BP_MODE=human conflicting with explicit BP_AGENT
@@ -1110,7 +1126,7 @@ func LoadClientWithProfile(profileName string) (ClientConfig, error) {
 	data, err := os.ReadFile(profilePath)
 	if err != nil {
 		if profileName == "default" {
-			return loadClientDirectEnv(), nil
+			return loadClientDirectEnv()
 		}
 		return ClientConfig{}, fmt.Errorf("profile %q not found at %s", profileName, profilePath)
 	}
@@ -1204,6 +1220,9 @@ func LoadClientWithProfile(profileName string) (ClientConfig, error) {
 
 	signingKeyPEM := getVal("BP_SIGNING_KEY_PEM")
 	var signingKey ed25519.PrivateKey
+	if agentID != "" && (filepath.Base(agentID) != agentID || strings.Contains(agentID, "..")) {
+		return ClientConfig{}, fmt.Errorf("invalid agent ID %q: path traversal not allowed", agentID)
+	}
 	if keyPath := getVal("BP_SIGNING_KEY"); keyPath != "" {
 		priv, err := LoadPrivateKeyFromFile(keyPath)
 		if err != nil {
@@ -1233,7 +1252,12 @@ func LoadClientWithProfile(profileName string) (ClientConfig, error) {
 	}, nil
 }
 
-func loadClientDirectEnv() ClientConfig {
+func loadClientDirectEnv() (ClientConfig, error) {
+	profileName := strings.TrimSpace(os.Getenv("BP_PROFILE"))
+	if profileName != "" && (filepath.Base(profileName) != profileName || strings.Contains(profileName, "..")) {
+		return ClientConfig{}, fmt.Errorf("invalid profile name %q: path traversal not allowed", profileName)
+	}
+
 	host := os.Getenv("BP_HOST")
 	if host == "" {
 		host = "localhost"
@@ -1272,6 +1296,10 @@ func loadClientDirectEnv() ClientConfig {
 		resolvedMode = "agent"
 	}
 
+	if agentID != "" && (filepath.Base(agentID) != agentID || strings.Contains(agentID, "..")) {
+		return ClientConfig{}, fmt.Errorf("invalid agent ID %q: path traversal not allowed", agentID)
+	}
+
 	signingKeyPEM := os.Getenv("BP_SIGNING_KEY_PEM")
 	var signingKey ed25519.PrivateKey
 	if keyPath := os.Getenv("BP_SIGNING_KEY"); keyPath != "" {
@@ -1295,5 +1323,5 @@ func loadClientDirectEnv() ClientConfig {
 		Mode:          resolvedMode,
 		SigningKey:    signingKey,
 		SigningKeyPEM: signingKeyPEM,
-	}
+	}, nil
 }

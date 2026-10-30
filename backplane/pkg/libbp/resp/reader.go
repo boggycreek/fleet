@@ -84,6 +84,9 @@ func (r *Reader) readValueWithDepth(depth int) (Value, error) {
 		if _, err := io.ReadFull(r.r, buf); err != nil {
 			return Value{}, err
 		}
+		if buf[length] != '\r' || buf[length+1] != '\n' {
+			return Value{}, fmt.Errorf("%w: invalid bulk string terminating CRLF", ErrProtocol)
+		}
 		return Value{Type: TypeBulkString, Str: string(buf[:length])}, nil
 
 	case TypeArray, TypePush, TypeSet:
