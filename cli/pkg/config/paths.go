@@ -287,3 +287,22 @@ func (p Paths) ResolveRepoDir() string {
 	cwd, _ := os.Getwd()
 	return cwd
 }
+
+// GetOpenRouterAPIKey resolves the OpenRouter API key from secrets/openrouter.key or OPENROUTER_API_KEY env.
+func (p Paths) GetOpenRouterAPIKey() string {
+	return GetOpenRouterAPIKey(p)
+}
+
+// GetOpenRouterAPIKey resolves the OpenRouter API key from secrets/openrouter.key or OPENROUTER_API_KEY env.
+func GetOpenRouterAPIKey(paths Paths) string {
+	if paths.SecretsDir != "" {
+		keyFile := filepath.Join(paths.SecretsDir, "openrouter.key")
+		if data, err := os.ReadFile(keyFile); err == nil {
+			key := strings.TrimSpace(string(data))
+			if key != "" {
+				return key
+			}
+		}
+	}
+	return strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+}

@@ -67,13 +67,23 @@ type SonarQubeInfraInfo struct {
 	AdminPassword string `json:"admin_password"`
 }
 
+// OpenRouterInfraInfo holds status and details for OpenRouter proxy gateway.
+type OpenRouterInfraInfo struct {
+	Status        string `json:"status"`
+	Container     string `json:"container"`
+	InternalURL   string `json:"internal_url"`
+	HostEndpoint  string `json:"host_endpoint"`
+	KeyConfigured bool   `json:"key_configured"`
+}
+
 // InfraStackInfo holds the complete information for all shared infrastructure services.
 type InfraStackInfo struct {
-	Valkey     *ValkeyInfraInfo    `json:"valkey"`
-	Forgejo    *ForgejoInfraInfo   `json:"forgejo"`
-	Gitea      *ForgejoInfraInfo   `json:"gitea,omitempty"`
-	PostgreSQL *PostgresInfraInfo  `json:"postgresql"`
-	SonarQube  *SonarQubeInfraInfo `json:"sonarqube"`
+	Valkey     *ValkeyInfraInfo     `json:"valkey"`
+	Forgejo    *ForgejoInfraInfo    `json:"forgejo"`
+	Gitea      *ForgejoInfraInfo    `json:"gitea,omitempty"`
+	PostgreSQL *PostgresInfraInfo   `json:"postgresql"`
+	SonarQube  *SonarQubeInfraInfo  `json:"sonarqube"`
+	OpenRouter *OpenRouterInfraInfo `json:"openrouter"`
 }
 
 type infoPair struct {
@@ -245,12 +255,28 @@ func GetInfraInfo(ctx context.Context, paths config.Paths, showSecrets bool) (*I
 		AdminPassword: sonarDisplayPass,
 	}
 
+	// 5. OpenRouter Proxy
+	orKey := config.GetOpenRouterAPIKey(paths)
+	orStatus := getState(infraOpenRouterContainer)
+	if orStatus == "stopped" && orKey == "" {
+		orStatus = "not_configured"
+	}
+
+	openRouterInfo := &OpenRouterInfraInfo{
+		Status:        orStatus,
+		Container:     infraOpenRouterContainer,
+		InternalURL:   "http://fleet-openrouter:8080/v1",
+		HostEndpoint:  "http://127.0.0.1:8080/v1",
+		KeyConfigured: orKey != "",
+	}
+
 	return &InfraStackInfo{
 		Valkey:     valkeyInfo,
 		Forgejo:    forgejoInfo,
 		Gitea:      forgejoInfo,
 		PostgreSQL: postgresInfo,
 		SonarQube:  sonarInfo,
+		OpenRouter: openRouterInfo,
 	}, nil
 }
 
@@ -274,6 +300,19 @@ func FormatInfraInfo(info *InfraStackInfo) string {
 				{"cli_command", info.Valkey.CLICommand},
 				{"operator_user", info.Valkey.OperatorUser},
 				{"operator_password", info.Valkey.OperatorPassword},
+			},
+		})
+	}
+
+	if info.OpenRouter != nil {
+		sections = append(sections, infoSection{
+			header: "[openrouter]",
+			pairs: []infoPair{
+				{"status", info.OpenRouter.Status},
+				{"container", info.OpenRouter.Container},
+				{"internal_url", info.OpenRouter.InternalURL},
+				{"host_endpoint", info.OpenRouter.HostEndpoint},
+				{"key_configured", fmt.Sprintf("%t", info.OpenRouter.KeyConfigured)},
 			},
 		})
 	}

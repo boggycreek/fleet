@@ -1047,3 +1047,50 @@ func TestStopAndCleanAgentContainer_PodMode(t *testing.T) {
 		t.Errorf("expected pod to be removed")
 	}
 }
+
+func TestStartOpenRouterContainer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tmpDir := t.TempDir()
+	paths := config.Paths{
+		DataHome:   filepath.Join(tmpDir, "data"),
+		SecretsDir: filepath.Join(tmpDir, "data", "secrets"),
+	}
+	_ = paths.EnsureDirectories()
+
+	// 1. When key is empty, StartOpenRouterContainer returns nil without running podman
+	t.Setenv("OPENROUTER_API_KEY", "")
+	if err := StartOpenRouterContainer(ctx, paths); err != nil {
+		t.Errorf("expected nil error when openrouter key is empty, got %v", err)
+	}
+
+	// 2. When key is set, StartOpenRouterContainer invokes podman
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test-key-1234")
+	var recordedArgs []string
+	restoreMock := SetExecCommandContextForTesting(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "podman" && len(args) > 0 && args[0] == "container" && args[1] == "exists" {
+			return exec.Command("false")
+		}
+		if name == "podman" && len(args) > 0 && args[0] == "run" {
+			recordedArgs = args
+		}
+		return exec.Command("true")
+	})
+	defer restoreMock()
+
+	err := StartOpenRouterContainer(ctx, paths)
+	if err != nil {
+		t.Fatalf("StartOpenRouterContainer failed: %v", err)
+	}
+	if len(recordedArgs) == 0 {
+		t.Fatalf("expected podman run command to be called for openrouter container")
+	}
+
+	// Verify secret was NOT exposed in argv
+	for _, arg := range recordedArgs {
+		if strings.Contains(arg, "sk-or-test-key-1234") {
+			t.Errorf("openrouter key leaked in argv: %s", arg)
+		}
+	}
+}

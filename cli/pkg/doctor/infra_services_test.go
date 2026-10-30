@@ -420,3 +420,31 @@ func TestCheckAndHealSonarContainer(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckAndHealOpenRouterContainer(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(func() {
+		_ = exec.Command("podman", "unshare", "rm", "-rf", tmpDir).Run()
+	})
+	paths := config.Paths{
+		DataHome:   filepath.Join(tmpDir, "data"),
+		SecretsDir: filepath.Join(tmpDir, "data", "secrets"),
+	}
+	_ = paths.EnsureDirectories()
+
+	// 1. When OpenRouter API key is NOT configured
+	t.Setenv("OPENROUTER_API_KEY", "")
+	reportNotConfigured := &DoctorReport{AgentName: "shared-infrastructure"}
+	checkAndHealOpenRouterContainer(context.Background(), paths, reportNotConfigured)
+	if len(reportNotConfigured.Checks) == 0 || !strings.Contains(reportNotConfigured.Checks[0].Message, "not configured") {
+		t.Errorf("expected disabled message when key is not configured, got: %+v", reportNotConfigured.Checks)
+	}
+
+	// 2. When OpenRouter key IS configured
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test-key-999")
+	reportConfigured := &DoctorReport{AgentName: "shared-infrastructure"}
+	checkAndHealOpenRouterContainer(context.Background(), paths, reportConfigured)
+	if len(reportConfigured.Checks) == 0 {
+		t.Errorf("expected check item for configured OpenRouter key")
+	}
+}

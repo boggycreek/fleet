@@ -31,8 +31,12 @@ func TestGetInfraInfo_Masked(t *testing.T) {
 		t.Fatalf("GetInfraInfo failed: %v", err)
 	}
 
-	if info.Valkey == nil || info.Forgejo == nil || info.PostgreSQL == nil || info.SonarQube == nil {
+	if info.Valkey == nil || info.Forgejo == nil || info.PostgreSQL == nil || info.SonarQube == nil || info.OpenRouter == nil {
 		t.Fatalf("expected all service structs to be non-nil")
+	}
+
+	if info.OpenRouter.InternalURL != "http://fleet-openrouter:8080/v1" {
+		t.Errorf("unexpected openrouter internal url: %s", info.OpenRouter.InternalURL)
 	}
 
 	// Verify backward-compatibility alias
@@ -220,12 +224,20 @@ func TestFormatInfraInfo_Alignment(t *testing.T) {
 			AdminUser:     "admin",
 			AdminPassword: "********",
 		},
+		OpenRouter: &OpenRouterInfraInfo{
+			Status:        "running",
+			Container:     "fleet-openrouter",
+			InternalURL:   "http://fleet-openrouter:8080/v1",
+			HostEndpoint:  "http://127.0.0.1:8080/v1",
+			KeyConfigured: true,
+		},
 	}
 
 	formatted := FormatInfraInfo(info)
 
 	if !strings.Contains(formatted, "[valkey]") || !strings.Contains(formatted, "[forgejo]") ||
-		!strings.Contains(formatted, "[postgresql]") || !strings.Contains(formatted, "[sonarqube]") {
+		!strings.Contains(formatted, "[postgresql]") || !strings.Contains(formatted, "[sonarqube]") ||
+		!strings.Contains(formatted, "[openrouter]") {
 		t.Fatalf("missing expected section header in formatted output:\n%s", formatted)
 	}
 

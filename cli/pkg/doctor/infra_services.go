@@ -25,12 +25,14 @@ import (
 // infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, and infraSonarContainer are the expected shared infra container names.
 // These are package-level vars so integration tests can override them with ephemeral container names.
 var (
-	infraValkeyContainer   = "fleet-valkey"
-	infraForgejoContainer  = "fleet-forgejo"
-	infraGiteaContainer    = infraForgejoContainer
-	infraPostgresContainer = "fleet-postgres"
-	infraSonarContainer    = "fleet-sonarqube"
+	infraValkeyContainer     = "fleet-valkey"
+	infraForgejoContainer    = "fleet-forgejo"
+	infraGiteaContainer      = infraForgejoContainer
+	infraPostgresContainer   = "fleet-postgres"
+	infraSonarContainer      = "fleet-sonarqube"
+	infraOpenRouterContainer = "fleet-openrouter"
 )
+
 
 func checkAndHealPostgresContainer(ctx context.Context, report *DoctorReport) {
 	containerName := infraPostgresContainer
@@ -355,4 +357,64 @@ func checkAndHealSonarContainer(ctx context.Context, paths config.Paths, report 
 		Message: fmt.Sprintf("Container %s, HTTP %s responsive (status: %s, admin: verified)", state, sonarURL, status.Status),
 	})
 	_ = client
+}
+
+func checkAndHealOpenRouterContainer(ctx context.Context, paths config.Paths, report *DoctorReport) {
+	apiKey := config.GetOpenRouterAPIKey(paths)
+	if apiKey == "" {
+		report.Checks = append(report.Checks, CheckItem{
+			Name:    "OpenRouter Proxy Gateway",
+			Status:  StatusOK,
+			Message: "OpenRouter API key not configured (secrets/openrouter.key or OPENROUTER_API_KEY env); proxy gateway disabled",
+		})
+		return
+	}
+
+	containerName := infraOpenRouterContainer
+	info, err := runtime.InspectAgentContainer(ctx, containerName)
+	state := "stopped"
+	if err == nil && info != nil {
+		state = info.State
+	}
+
+	httpClient := &http.Client{Timeout: 1 * time.Second}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/healthz", nil)
+	resp, err := httpClient.Do(req)
+	if err == nil && resp.StatusCode == http.StatusOK {
+		_ = resp.Body.Close()
+		report.Checks = append(report.Checks, CheckItem{
+			Name:    "OpenRouter Proxy Gateway",
+			Status:  StatusOK,
+			Message: fmt.Sprintf("Container %s, HTTP http://127.0.0.1:8080/v1 responsive (key configured)", state),
+		})
+		return
+	}
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+
+	// Attempt auto-healing: start container
+	if healErr := runtime.StartOpenRouterContainer(ctx, paths); healErr == nil {
+		reqRetry, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/healthz", nil)
+		if respRetry, retryErr := httpClient.Do(reqRetry); retryErr == nil && respRetry.StatusCode == http.StatusOK {
+			_ = respRetry.Body.Close()
+			report.Checks = append(report.Checks, CheckItem{
+				Name:    "OpenRouter Proxy Gateway",
+				Status:  StatusHealed,
+				Message: fmt.Sprintf("Restored OpenRouter proxy container %s (listening on 127.0.0.1:8080)", containerName),
+				Healed:  true,
+			})
+			report.HealedCount++
+			return
+		} else if respRetry != nil {
+			_ = respRetry.Body.Close()
+		}
+	}
+
+	report.Checks = append(report.Checks, CheckItem{
+		Name:    "OpenRouter Proxy Gateway",
+		Status:  StatusWarning,
+		Message: fmt.Sprintf("OpenRouter proxy container %s is %s (start via `fleet infra up`)", containerName, state),
+	})
+	report.WarningCount++
 }

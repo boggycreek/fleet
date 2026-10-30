@@ -4,5 +4,6 @@ use (
 	./agent
 	./backplane
 	./cli
+	./images/infra/openrouter-proxy
 	./mcp
 )
