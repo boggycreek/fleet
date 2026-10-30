@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/boggycreek/fleet/backplane/pkg/libbp"
 	"github.com/boggycreek/fleet/mcp/pkg/mcp"
@@ -137,6 +139,27 @@ func NewMCPServer(client BPClient, r io.Reader, w io.Writer) *MCPServer {
 	return s
 }
 
+func sanitizeRecipient(r string) (string, error) {
+	trimmed := strings.TrimSpace(r)
+	if trimmed == "" {
+		return "", fmt.Errorf("recipient cannot be empty")
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n\x00") {
+		return "", fmt.Errorf("recipient contains forbidden whitespace or control characters: %q", r)
+	}
+	return trimmed, nil
+}
+
+func sanitizeFilePath(fp string) (string, error) {
+	if fp == "" {
+		return "", nil
+	}
+	if strings.Contains(fp, "\x00") {
+		return "", fmt.Errorf("file_path contains forbidden null bytes")
+	}
+	return filepath.Clean(strings.TrimSpace(fp)), nil
+}
+
 func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) mcp.CallToolResult {
 	args := params.ParseArguments()
 
@@ -146,17 +169,23 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		message, _ := args["message"].(string)
 		replyTo, _ := args["reply_to"].(string)
 
-		if recipient == "" || message == "" {
-			return mcp.ErrorResult("Missing required arguments 'recipient' and 'message'")
+		cleanRecipient, err := sanitizeRecipient(recipient)
+		if err != nil {
+			return mcp.ErrorResult(err.Error())
+		}
+		if strings.TrimSpace(message) == "" || strings.Contains(message, "\x00") {
+			return mcp.ErrorResult("Missing or invalid argument 'message'")
 		}
 
 		var sentMsg *libbp.Message
-		var err error
 
-		if replyTo != "" {
-			sentMsg, err = s.bpClient.Reply(ctx, replyTo, recipient, message)
+		if strings.TrimSpace(replyTo) != "" {
+			if strings.Contains(replyTo, "\x00") {
+				return mcp.ErrorResult("reply_to contains forbidden null bytes")
+			}
+			sentMsg, err = s.bpClient.Reply(ctx, strings.TrimSpace(replyTo), cleanRecipient, message)
 		} else {
-			sentMsg, err = s.bpClient.Tell(ctx, recipient, message)
+			sentMsg, err = s.bpClient.Tell(ctx, cleanRecipient, message)
 		}
 
 		if err != nil {
@@ -170,11 +199,15 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		message, _ := args["message"].(string)
 		filePath, _ := args["file_path"].(string)
 
-		if message == "" {
-			return mcp.ErrorResult("Missing required argument 'message'")
+		if strings.TrimSpace(message) == "" || strings.Contains(message, "\x00") {
+			return mcp.ErrorResult("Missing or invalid argument 'message'")
+		}
+		cleanFP, err := sanitizeFilePath(filePath)
+		if err != nil {
+			return mcp.ErrorResult(err.Error())
 		}
 
-		sentMsg, err := s.bpClient.Say(ctx, message, filePath)
+		sentMsg, err := s.bpClient.Say(ctx, message, cleanFP)
 		if err != nil {
 			return mcp.ErrorResult(fmt.Sprintf("Error broadcasting fleet message: %v", err))
 		}
@@ -187,9 +220,22 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		if bsVal, ok := args["block_seconds"].(float64); ok {
 			blockSeconds = int(bsVal)
 		}
+		if blockSeconds < 0 {
+			blockSeconds = 0
+		}
+		if blockSeconds > 300 {
+			blockSeconds = 300
+		}
+
 		var maxCount int
 		if mcVal, ok := args["count"].(float64); ok {
 			maxCount = int(mcVal)
+		}
+		if maxCount < 0 {
+			maxCount = 0
+		}
+		if maxCount > 500 {
+			maxCount = 500
 		}
 
 		msgs, err := s.bpClient.Recv(ctx, blockSeconds)
@@ -215,15 +261,16 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 
 	case "fleet_set_status":
 		status, _ := args["status"].(string)
-		if status == "" {
-			return mcp.ErrorResult("Missing required argument 'status'")
+		if strings.TrimSpace(status) == "" || strings.Contains(status, "\x00") {
+			return mcp.ErrorResult("Missing or invalid argument 'status'")
 		}
 
-		if err := s.bpClient.SetStatus(ctx, status); err != nil {
+		cleanStatus := strings.TrimSpace(status)
+		if err := s.bpClient.SetStatus(ctx, cleanStatus); err != nil {
 			return mcp.ErrorResult(fmt.Sprintf("Error updating fleet status: %v", err))
 		}
 
-		return mcp.TextResult(fmt.Sprintf("Status updated to %q", status))
+		return mcp.TextResult(fmt.Sprintf("Status updated to %q", cleanStatus))
 
 	default:
 		return mcp.ErrorResult(fmt.Sprintf("Unknown tool: %s", params.Name))

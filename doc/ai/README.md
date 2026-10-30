@@ -12,6 +12,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[Multi-Machine Local Network Federation & Gateway DNS](multi-machine-network-federation.md)** (`fleet-multi-machine-network-federation`): Architecture evaluation and operational guide for multi-machine local network Fleet pod deployment, federated backplane relaying, and gateway DNS resolution.
 - **[VS Code Extension Design](vscode-extension-design.md)** (`fleet-vscode-extension-design`): Architecture and UX design guide for Fleet VS Code extension with Remote-SSH one-click attach.
 - **[FreeBSD Host Support & Runtime Porting Guide](freebsd-host-support.md)** (`fleet-freebsd-host-support`): FreeBSD 14.x/15.x host compatibility, bhyve microVM setup, pkg package management, ZFS dataset volumes, pf.conf anchor networking, and GOOS=freebsd cross-compilation.
+- **[MCP Suite Audit Findings & Security Hardening](mcp-suite-audit-findings.md)** (`fleet-mcp-suite-audit-findings`): Adversarial security audit, input sanitization assessment, JSON-RPC 2.0 protocol compliance review, and hardening report for the MCP server suite.
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.

@@ -57,6 +57,44 @@ func (s *Server) Version() string {
 	return s.version
 }
 
+const maxLineLength = 10 << 20 // 10MB max request line length
+
+// jsonRPCResponse is used internally to guarantee that the "id" field is explicitly serialized
+// as "id": null (or "id": <value>) in JSON-RPC 2.0 response objects.
+type jsonRPCResponse struct {
+	JSONRPC string        `json:"jsonrpc"`
+	ID      any           `json:"id"`
+	Result  any           `json:"result,omitempty"`
+	Error   *JSONRPCError `json:"error,omitempty"`
+}
+
+func readLineBounded(r *bufio.Reader, maxLen int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, isPrefix, err := r.ReadLine()
+		if err != nil {
+			if len(line) > 0 && errors.Is(err, io.EOF) {
+				return line, nil
+			}
+			return nil, err
+		}
+		line = append(line, chunk...)
+		if len(line) > maxLen {
+			for isPrefix {
+				_, isPrefix, err = r.ReadLine()
+				if err != nil {
+					break
+				}
+			}
+			return nil, fmt.Errorf("request message line exceeds maximum limit of %d bytes", maxLen)
+		}
+		if !isPrefix {
+			break
+		}
+	}
+	return line, nil
+}
+
 // Serve handles incoming JSON-RPC requests until context cancellation or EOF.
 func (s *Server) Serve(ctx context.Context) error {
 	for {
@@ -66,10 +104,14 @@ func (s *Server) Serve(ctx context.Context) error {
 		default:
 		}
 
-		line, err := s.reader.ReadBytes('\n')
+		line, err := readLineBounded(s.reader, maxLineLength)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
+			}
+			if strings.Contains(err.Error(), "exceeds maximum limit") {
+				_ = s.SendError(nil, CodeInvalidRequest, err.Error())
+				continue
 			}
 			return err
 		}
@@ -85,11 +127,21 @@ func (s *Server) Serve(ctx context.Context) error {
 			continue
 		}
 
+		if req.JSONRPC != "2.0" {
+			_ = s.SendError(req.ID, CodeInvalidRequest, "Invalid Request: jsonrpc must be '2.0'")
+			continue
+		}
+
 		s.handleMessage(ctx, &req)
 	}
 }
 
 func (s *Server) handleMessage(ctx context.Context, req *JSONRPCMessage) {
+	if strings.HasPrefix(req.Method, "notifications/") || req.Method == "notifications/initialized" {
+		// No response required for notifications
+		return
+	}
+
 	switch req.Method {
 	case "initialize":
 		res := map[string]any{
@@ -103,9 +155,6 @@ func (s *Server) handleMessage(ctx context.Context, req *JSONRPCMessage) {
 			},
 		}
 		_ = s.SendResult(req.ID, res)
-
-	case "notifications/initialized":
-		// No response required for notifications
 
 	case "tools/list":
 		_ = s.SendResult(req.ID, map[string]any{"tools": s.tools})
@@ -135,7 +184,7 @@ func (s *Server) SendResult(id, result any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msg := JSONRPCMessage{
+	msg := jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Result:  result,
@@ -153,7 +202,7 @@ func (s *Server) SendError(id any, code int, message string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msg := JSONRPCMessage{
+	msg := jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Error: &JSONRPCError{

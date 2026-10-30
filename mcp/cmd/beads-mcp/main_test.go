@@ -12,6 +12,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 type mockRunner struct {
@@ -196,5 +198,92 @@ func TestRunFunction(t *testing.T) {
 	}
 	if !strings.Contains(outBuf.String(), "beads-mcp") {
 		t.Errorf("expected beads-mcp in output, got: %s", outBuf.String())
+	}
+}
+
+func TestBeadsMCPSecurityValidation(t *testing.T) {
+	mock := &mockRunner{}
+	server := NewMCPServer(mock, "/home/agent/tasks", bytes.NewBuffer(nil), &bytes.Buffer{})
+
+	// 1. Flag injection in id
+	resFlag := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "bd_show",
+		Arguments: json.RawMessage(`{"id":"--exec=id"}`),
+	})
+	if !resFlag.IsError || !strings.Contains(resFlag.Content[0].Text, "cannot start with '-'") {
+		t.Errorf("expected flag injection error, got: %+v", resFlag)
+	}
+
+	// 2. Invalid status enum
+	resStatus := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "bd_list",
+		Arguments: json.RawMessage(`{"status":"MALICIOUS"}`),
+	})
+	if !resStatus.IsError || !strings.Contains(resStatus.Content[0].Text, "Invalid status filter") {
+		t.Errorf("expected invalid status error, got: %+v", resStatus)
+	}
+
+	// 3. Invalid priority enum
+	resPrio := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "bd_list",
+		Arguments: json.RawMessage(`{"priority":"P99"}`),
+	})
+	if !resPrio.IsError || !strings.Contains(resPrio.Content[0].Text, "Invalid priority filter") {
+		t.Errorf("expected invalid priority error, got: %+v", resPrio)
+	}
+
+	// 4. Invalid type enum
+	resType := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "bd_create",
+		Arguments: json.RawMessage(`{"title":"Task","type":"exploit"}`),
+	})
+	if !resType.IsError || !strings.Contains(resType.Content[0].Text, "Invalid type parameter") {
+		t.Errorf("expected invalid type error, got: %+v", resType)
+	}
+
+	// 5. Control character in title
+	resCtrl := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "bd_create",
+		Arguments: json.RawMessage("{\"title\":\"Bad\\u0000Title\"}"),
+	})
+	if !resCtrl.IsError || !strings.Contains(resCtrl.Content[0].Text, "forbidden control characters") {
+		t.Errorf("expected control char error, got: %+v", resCtrl)
+	}
+
+	// 6. Null byte in description
+	resDesc := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "bd_create",
+		Arguments: json.RawMessage("{\"title\":\"Good Title\",\"description\":\"bad\\u0000desc\"}"),
+	})
+	if !resDesc.IsError || !strings.Contains(resDesc.Content[0].Text, "null byte") {
+		t.Errorf("expected null byte desc error, got: %+v", resDesc)
+	}
+
+	// 7. Null byte in reason
+	resReason := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "bd_close",
+		Arguments: json.RawMessage("{\"id\":\"task-1\",\"reason\":\"bad\\u0000reason\"}"),
+	})
+	if !resReason.IsError || !strings.Contains(resReason.Content[0].Text, "null byte") {
+		t.Errorf("expected null byte reason error, got: %+v", resReason)
+	}
+}
+
+func TestLimitedBuffer(t *testing.T) {
+	buf := &limitedBuffer{max: 10}
+	n, err := buf.Write([]byte("hello "))
+	if err != nil || n != 6 {
+		t.Fatalf("unexpected write: %d, %v", n, err)
+	}
+	n, err = buf.Write([]byte("world!!!!"))
+	if err != nil || n != 9 {
+		t.Fatalf("unexpected write: %d, %v", n, err)
+	}
+	if string(buf.Bytes()) != "hello worl" {
+		t.Errorf("expected truncated string 'hello worl', got %q", string(buf.Bytes()))
+	}
+	n, err = buf.Write([]byte("more"))
+	if err != nil || n != 4 {
+		t.Fatalf("unexpected write: %d, %v", n, err)
 	}
 }

@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/boggycreek/fleet/cli/pkg/forgejo"
@@ -214,6 +216,32 @@ func NewMCPServer(client ForgejoClient, r io.Reader, w io.Writer) *MCPServer {
 	return s
 }
 
+func validateName(name, label string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return fmt.Errorf("%s cannot be empty", label)
+	}
+	if strings.ContainsAny(trimmed, "/\\:\x00\r\n") || strings.Contains(trimmed, "..") {
+		return fmt.Errorf("%s contains forbidden path or control characters: %q", label, name)
+	}
+	return nil
+}
+
+func sanitizeFilePath(filePath string) (string, error) {
+	trimmed := strings.TrimSpace(filePath)
+	if trimmed == "" {
+		return "", fmt.Errorf("file_path cannot be empty")
+	}
+	if strings.Contains(trimmed, "\x00") {
+		return "", fmt.Errorf("file_path contains forbidden null bytes")
+	}
+	clean := path.Clean(strings.TrimPrefix(trimmed, "/"))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+		return "", fmt.Errorf("file_path contains traversal sequence")
+	}
+	return clean, nil
+}
+
 func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) mcp.CallToolResult {
 	args := params.ParseArguments()
 
@@ -221,6 +249,10 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 	if owner == "" {
 		owner = "fleet"
 	}
+	if err := validateName(owner, "owner"); err != nil {
+		return mcp.ErrorResult(err.Error())
+	}
+
 	repo, _ := args["repo"].(string)
 
 	switch params.Name {
@@ -228,13 +260,23 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		if repo == "" {
 			repo = "tasks"
 		}
+		if err := validateName(repo, "repo"); err != nil {
+			return mcp.ErrorResult(err.Error())
+		}
 		state, _ := args["state"].(string)
+		if state != "" && state != "open" && state != "closed" && state != "all" {
+			return mcp.ErrorResult(fmt.Sprintf("Invalid state parameter: %s", state))
+		}
+
 		var page, limit int
 		if pVal, ok := args["page"].(float64); ok {
 			page = int(pVal)
 		}
 		if lVal, ok := args["limit"].(float64); ok {
 			limit = int(lVal)
+		}
+		if limit <= 0 || limit > 100 {
+			limit = 50
 		}
 
 		issues, err := s.forgejoClient.ListIssues(ctx, owner, repo, state, page, limit)
@@ -248,6 +290,9 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 	case "forge_create_task":
 		if repo == "" {
 			repo = "tasks"
+		}
+		if err := validateName(repo, "repo"); err != nil {
+			return mcp.ErrorResult(err.Error())
 		}
 		title, _ := args["title"].(string)
 		body, _ := args["body"].(string)
@@ -292,6 +337,9 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		if repo == "" || strings.TrimSpace(title) == "" || strings.TrimSpace(head) == "" {
 			return mcp.ErrorResult("Missing required arguments ('repo', 'title', 'head')")
 		}
+		if err := validateName(repo, "repo"); err != nil {
+			return mcp.ErrorResult(err.Error())
+		}
 
 		pr, err := s.forgejoClient.CreatePullRequest(ctx, owner, repo, title, body, head, base)
 		if err != nil {
@@ -309,8 +357,17 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		if repo == "" || index <= 0 {
 			return mcp.ErrorResult("Missing required arguments ('repo', 'index')")
 		}
+		if err := validateName(repo, "repo"); err != nil {
+			return mcp.ErrorResult(err.Error())
+		}
 
 		event, _ := args["event"].(string)
+		if event != "" {
+			normEvent := strings.ToUpper(strings.TrimSpace(event))
+			if normEvent != "APPROVE" && normEvent != "REQUEST_CHANGES" && normEvent != "COMMENT" {
+				return mcp.ErrorResult(fmt.Sprintf("Invalid event parameter: %s", event))
+			}
+		}
 		body, _ := args["body"].(string)
 
 		review, err := s.forgejoClient.ReviewPullRequest(ctx, owner, repo, index, event, body)
@@ -328,10 +385,17 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		if repo == "" || filePath == "" {
 			return mcp.ErrorResult("Missing required arguments ('repo', 'file_path')")
 		}
-
-		file, err := s.forgejoClient.GetFile(ctx, owner, repo, filePath, ref)
+		if err := validateName(repo, "repo"); err != nil {
+			return mcp.ErrorResult(err.Error())
+		}
+		cleanPath, err := sanitizeFilePath(filePath)
 		if err != nil {
-			return mcp.ErrorResult(fmt.Sprintf("Error reading file %s: %v", filePath, err))
+			return mcp.ErrorResult(fmt.Sprintf("Invalid file_path: %v", err))
+		}
+
+		file, err := s.forgejoClient.GetFile(ctx, owner, repo, cleanPath, ref)
+		if err != nil {
+			return mcp.ErrorResult(fmt.Sprintf("Error reading file %s: %v", cleanPath, err))
 		}
 
 		data, _ := json.MarshalIndent(file, "", "  ")
@@ -375,6 +439,11 @@ func Run(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 	if adminPass == "" {
 		adminPass = os.Getenv("ADMIN_BACKPLANE_PASSWORD")
+	}
+
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return fmt.Errorf("invalid FORGEJO_URL scheme: %s (must be http or https)", baseURL)
 	}
 
 	client := forgejo.NewClient(forgejo.ClientConfig{

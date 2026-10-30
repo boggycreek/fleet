@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/boggycreek/fleet/cli/pkg/forgejo"
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 type mockForgejoClient struct {
@@ -241,5 +242,62 @@ func TestRunFunction(t *testing.T) {
 	}
 	if !strings.Contains(outBuf.String(), "forgejo-mcp") {
 		t.Errorf("expected forgejo-mcp in output, got: %s", outBuf.String())
+	}
+}
+
+func TestForgejoMCPSecurityValidation(t *testing.T) {
+	client := &mockGiteaClient{}
+	server := NewMCPServer(client, bytes.NewBuffer(nil), &bytes.Buffer{})
+
+	// 1. Path traversal in file_path
+	resTrav := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "forge_read_file",
+		Arguments: json.RawMessage(`{"owner":"fleet","repo":"tools","file_path":"../../etc/passwd"}`),
+	})
+	if !resTrav.IsError || !strings.Contains(resTrav.Content[0].Text, "traversal") {
+		t.Errorf("expected path traversal error, got: %+v", resTrav)
+	}
+
+	// 2. Invalid owner name
+	resOwner := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "forge_list_tasks",
+		Arguments: json.RawMessage(`{"owner":"../bad","repo":"tasks"}`),
+	})
+	if !resOwner.IsError || !strings.Contains(resOwner.Content[0].Text, "forbidden path") {
+		t.Errorf("expected owner validation error, got: %+v", resOwner)
+	}
+
+	// 3. Invalid repo name
+	resRepo := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "forge_list_tasks",
+		Arguments: json.RawMessage(`{"owner":"fleet","repo":"bad/repo"}`),
+	})
+	if !resRepo.IsError || !strings.Contains(resRepo.Content[0].Text, "forbidden path") {
+		t.Errorf("expected repo validation error, got: %+v", resRepo)
+	}
+
+	// 4. Invalid state enum
+	resState := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "forge_list_tasks",
+		Arguments: json.RawMessage(`{"owner":"fleet","repo":"tasks","state":"INVALID"}`),
+	})
+	if !resState.IsError || !strings.Contains(resState.Content[0].Text, "Invalid state parameter") {
+		t.Errorf("expected invalid state error, got: %+v", resState)
+	}
+
+	// 5. Invalid event enum
+	resEvent := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "forge_review_pull_request",
+		Arguments: json.RawMessage(`{"owner":"fleet","repo":"tools","index":1,"event":"MALICIOUS"}`),
+	})
+	if !resEvent.IsError || !strings.Contains(resEvent.Content[0].Text, "Invalid event parameter") {
+		t.Errorf("expected invalid event error, got: %+v", resEvent)
+	}
+
+	// 6. Invalid URL scheme in Run
+	t.Setenv("FORGEJO_URL", "ftp://invalid-scheme.local")
+	err := Run(context.Background(), bytes.NewBuffer(nil), &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "invalid FORGEJO_URL scheme") {
+		t.Errorf("expected URL scheme error, got: %v", err)
 	}
 }

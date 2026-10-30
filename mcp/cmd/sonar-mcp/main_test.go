@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/boggycreek/fleet/cli/pkg/sonar"
+	"github.com/boggycreek/fleet/mcp/pkg/mcp"
 )
 
 func TestMCPServerLifecycle(t *testing.T) {
@@ -134,5 +135,44 @@ func TestRunFunction(t *testing.T) {
 	}
 	if !strings.Contains(outBuf.String(), "sonar-mcp") {
 		t.Errorf("expected sonar-mcp in output, got: %s", outBuf.String())
+	}
+}
+
+func TestSonarMCPSecurityValidation(t *testing.T) {
+	client := sonar.NewClient(sonar.ClientConfig{BaseURL: "http://127.0.0.1:9000"})
+	server := NewMCPServer(client, bytes.NewBuffer(nil), &bytes.Buffer{})
+
+	// 1. Invalid project_key
+	resKey := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "sonar_quality_gate",
+		Arguments: json.RawMessage(`{"project_key":"bad key with spaces"}`),
+	})
+	if !resKey.IsError || !strings.Contains(resKey.Content[0].Text, "Invalid project_key") {
+		t.Errorf("expected project_key validation error, got: %+v", resKey)
+	}
+
+	// 2. Invalid severity
+	resSev := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "sonar_issues",
+		Arguments: json.RawMessage(`{"project_key":"proj","severity":"CRITICAL_HAX"}`),
+	})
+	if !resSev.IsError || !strings.Contains(resSev.Content[0].Text, "Invalid severity parameter") {
+		t.Errorf("expected severity error, got: %+v", resSev)
+	}
+
+	// 3. Invalid issue_type
+	resType := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "sonar_issues",
+		Arguments: json.RawMessage(`{"project_key":"proj","issue_type":"EXPLOIT"}`),
+	})
+	if !resType.IsError || !strings.Contains(resType.Content[0].Text, "Invalid issue_type parameter") {
+		t.Errorf("expected issue_type error, got: %+v", resType)
+	}
+
+	// 4. Invalid URL scheme in Run
+	t.Setenv("SONAR_HOST_URL", "gopher://invalid-scheme.local")
+	err := Run(context.Background(), bytes.NewBuffer(nil), &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "invalid SONAR_HOST_URL scheme") {
+		t.Errorf("expected URL scheme error, got: %v", err)
 	}
 }

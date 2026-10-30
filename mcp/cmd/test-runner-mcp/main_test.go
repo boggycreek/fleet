@@ -251,3 +251,33 @@ func TestRunFunction(t *testing.T) {
 		t.Errorf("expected coverage content in output, got: %s", output)
 	}
 }
+
+func TestTestRunnerMCPSecurityValidation(t *testing.T) {
+	client := sonar.NewClient(sonar.ClientConfig{BaseURL: "http://127.0.0.1:9000"})
+	server := NewMCPServer(client, bytes.NewBuffer(nil), &bytes.Buffer{})
+
+	// 1. Invalid project_key
+	resKey := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "test_get_coverage_gaps",
+		Arguments: json.RawMessage(`{"project_key":"bad proj key"}`),
+	})
+	if !resKey.IsError || !strings.Contains(resKey.Content[0].Text, "forbidden characters") {
+		t.Errorf("expected project_key validation error, got: %+v", resKey)
+	}
+
+	// 2. Invalid component_key
+	resComp := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "test_get_coverage_gaps",
+		Arguments: json.RawMessage(`{"project_key":"proj","component_key":"../traversal"}`),
+	})
+	if !resComp.IsError || !strings.Contains(resComp.Content[0].Text, "forbidden characters") {
+		t.Errorf("expected component_key validation error, got: %+v", resComp)
+	}
+
+	// 3. Invalid URL scheme in test_run_suite / Run
+	t.Setenv("TEST_RUNNER_HOST_URL", "ftp://invalid-scheme.local")
+	err := Run(context.Background(), bytes.NewBuffer(nil), &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "invalid TEST_RUNNER_HOST_URL scheme") {
+		t.Errorf("expected URL scheme error, got: %v", err)
+	}
+}
