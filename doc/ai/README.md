@@ -11,6 +11,7 @@ This directory provides progressive disclosure of architectural principles, engi
 - **[Code Review Protocol](code-review.md)** (`fleet-code-review`): Protocol, inspection checklist, and reporting format for architectural, logical, and security PR reviews.
 - **[Shell & CI Security Audit Findings](shell-and-ci-audit-findings.md)** (`fleet-shell-and-ci-audit-findings`): Targeted security, error handling, and portability audit findings for Fleet's shell scripts, installer, setup, and GitHub Actions CI toolchains.
 - **[NVIDIA OpenShell Evaluation](nvidia-openshell-evaluation.md)** (`fleet-openshell-evaluation`): Architectural evaluation of NVIDIA OpenShell runtime, Landlock/seccomp sandboxing, egress proxying, and Podman comparison.
+- **[Distributed Inference Evaluation: exo](distributed-inference-exo.md)** (`fleet-exo-evaluation`): Technical evaluation of exo for local-network LLM inference behind Fleet's local model gateway.
 
 ## Core Directives for Autonomous Agents
 1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.
