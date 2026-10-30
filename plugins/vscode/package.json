@@ -1,0 +1,115 @@
+{
+  "name": "fleet-vscode",
+  "displayName": "Fleet - Agent Sandbox Manager",
+  "description": "VS Code extension for Fleet agent management and Remote-SSH one-click attach",
+  "version": "0.1.0",
+  "publisher": "boggycreek",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:fleet-agents"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "fleet-sidebar",
+          "title": "Fleet",
+          "icon": "$(server-environment)"
+        }
+      ]
+    },
+    "views": {
+      "fleet-sidebar": [
+        {
+          "id": "fleet-agents",
+          "name": "Fleet Agents"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "fleet.refresh",
+        "title": "Refresh Agents",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "fleet.attach",
+        "title": "Attach Remote-SSH (One-Click)",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "fleet.start",
+        "title": "Start Agent",
+        "icon": "$(play)"
+      },
+      {
+        "command": "fleet.stop",
+        "title": "Stop Agent",
+        "icon": "$(stop-circle)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "fleet.refresh",
+          "when": "view == fleet-agents",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "fleet.attach",
+          "when": "view == fleet-agents && viewItem == agent-running",
+          "group": "inline@1"
+        },
+        {
+          "command": "fleet.start",
+          "when": "view == fleet-agents && viewItem == agent-stopped",
+          "group": "inline@2"
+        },
+        {
+          "command": "fleet.stop",
+          "when": "view == fleet-agents && viewItem == agent-running",
+          "group": "inline@3"
+        }
+      ]
+    },
+    "configuration": {
+      "type": "object",
+      "title": "Fleet Configuration",
+      "properties": {
+        "fleet.cliPath": {
+          "type": "string",
+          "default": "fleet",
+          "description": "Path to the host 'fleet' management CLI binary."
+        },
+        "fleet.refreshInterval": {
+          "type": "number",
+          "default": 5000,
+          "description": "Auto-refresh interval for agent status polling in milliseconds."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "mocha --ui tdd out/test/suite/extension.test.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.3.9",
+    "mocha": "^10.2.0",
+    "typescript": "^5.3.3"
+  }
+}

@@ -112,6 +112,8 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* IDE plugin lifecycles are governed strictly through `sndbx plugin <add|remove|list> <target>` without aliases or shorthand commands.
 - **[00020 — JetBrains Gateway vs. Toolbox Decoupling and Native SSH Sync](00020-JetBrainsGatewayVsToolboxDecouplingAndNativeSshSync.md)**  
   *Executive Summary:* Decouples IntelliJ Gateway plugins (`gateway`) from JetBrains Toolbox App integration (`toolbox`), synchronizing running sandboxes directly to Toolbox's native `ssh/settings.json` and inlined host blocks.
+- **[00057 — VS Code Remote-SSH Extension for Fleet Agent Management](00057-vscode-remote-ssh-extension.md)**
+  *Executive Summary:* Implements a lightweight host-side VS Code extension in `plugins/vscode` calling `fleet agent list --json` and triggering one-click Remote-SSH attach (`vscode://vscode-remote/ssh-remote+fleet-<name>/home/agent/workspace`).
 
 ### Shared Fleet Services (`THEME-FLEET`)
 - **[00021 — Local Gitea Fleet Collaboration and Memory Backup](00021-LocalGiteaFleetCollaborationAndBackup.md)** *(Superseded by 00046)*  
