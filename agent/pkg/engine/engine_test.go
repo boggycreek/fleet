@@ -8,6 +8,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1440,5 +1441,298 @@ func TestREPLEngineDuplicateToolCallDeduplication(t *testing.T) {
 
 	if execCount != 1 {
 		t.Errorf("expected fleet_send_message to be executed exactly once due to deduplication, got %d", execCount)
+	}
+}
+
+func TestREPLEngine_ReasoningBudget_DynamicMapping(t *testing.T) {
+	var capturedRequests []ChatCompletionRequest
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		capturedRequests = append(capturedRequests, req)
+		mu.Unlock()
+
+		resp := ChatCompletionResponse{
+			ID:    "resp-priority",
+			Model: "test-model",
+			Choices: []ChatChoice{
+				{
+					Index: 0,
+					Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Task finished.",
+					},
+					FinishReason: "stop",
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	testCases := []struct {
+		name       string
+		priority   int
+		wantBudget float64
+		wantEffort string
+	}{
+		{"P0", 0, 0.99, "high"},
+		{"P1", 1, 0.95, "high"},
+		{"P2", 2, 0.75, "medium"},
+		{"P3", 3, 0.50, "low"},
+		{"P4", 4, 0.25, "low"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mu.Lock()
+			capturedRequests = nil
+			mu.Unlock()
+
+			tmpDir := t.TempDir()
+			llm := NewLLMClient(ts.URL, "key", "test-model", 5*time.Second)
+			eng := NewREPLEngine(llm, nil, tmpDir, "coder")
+			eng.SetPollInterval(10 * time.Millisecond)
+			eng.SetPriorityResolver(NewStaticTaskResolver(tc.priority, true))
+
+			bus := runtime.NewEventBus()
+			state := runtime.NewSharedState(filepath.Join(tmpDir, "state.json"), "agent-test")
+			eng.AppendMessage(ChatMessage{Role: "user", Content: "Run priority task"})
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			errChan := make(chan error, 1)
+			go func() {
+				errChan <- eng.Start(ctx, bus, state)
+			}()
+
+			for i := 0; i < 50; i++ {
+				time.Sleep(20 * time.Millisecond)
+				if state.Read().Status == "idle" {
+					break
+				}
+			}
+
+			cancel()
+			<-errChan
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(capturedRequests) == 0 {
+				t.Fatal("expected at least one request to be captured")
+			}
+			lastReq := capturedRequests[len(capturedRequests)-1]
+			if lastReq.ReasoningBudget == nil {
+				t.Fatalf("expected ReasoningBudget to be non-nil for priority %d", tc.priority)
+			}
+			if *lastReq.ReasoningBudget != tc.wantBudget {
+				t.Errorf("got ReasoningBudget %v, want %v", *lastReq.ReasoningBudget, tc.wantBudget)
+			}
+			if lastReq.ReasoningEffort != tc.wantEffort {
+				t.Errorf("got ReasoningEffort %q, want %q", lastReq.ReasoningEffort, tc.wantEffort)
+			}
+		})
+	}
+}
+
+func TestREPLEngine_ReasoningBudget_NotFoundAndError(t *testing.T) {
+	var capturedRequests []ChatCompletionRequest
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatCompletionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		capturedRequests = append(capturedRequests, req)
+		mu.Unlock()
+
+		resp := ChatCompletionResponse{
+			ID:    "resp-test",
+			Model: "test-model",
+			Choices: []ChatChoice{
+				{
+					Index: 0,
+					Message: ChatMessage{
+						Role:    "assistant",
+						Content: "Done.",
+					},
+					FinishReason: "stop",
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	t.Run("NotFound", func(t *testing.T) {
+		mu.Lock()
+		capturedRequests = nil
+		mu.Unlock()
+
+		tmpDir := t.TempDir()
+		llm := NewLLMClient(ts.URL, "key", "test-model", 5*time.Second)
+		eng := NewREPLEngine(llm, nil, tmpDir, "coder")
+		eng.SetPollInterval(10 * time.Millisecond)
+		eng.SetPriorityResolver(NewStaticTaskResolver(0, false))
+
+		bus := runtime.NewEventBus()
+		state := runtime.NewSharedState(filepath.Join(tmpDir, "state.json"), "agent-test")
+		eng.AppendMessage(ChatMessage{Role: "user", Content: "Hello"})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		errChan := make(chan error, 1)
+		go func() {
+			errChan <- eng.Start(ctx, bus, state)
+		}()
+
+		for i := 0; i < 50; i++ {
+			time.Sleep(20 * time.Millisecond)
+			if state.Read().Status == "idle" {
+				break
+			}
+		}
+		cancel()
+		<-errChan
+
+		mu.Lock()
+		defer mu.Unlock()
+		if len(capturedRequests) == 0 {
+			t.Fatal("expected captured requests")
+		}
+		req := capturedRequests[0]
+		if req.ReasoningBudget != nil {
+			t.Errorf("expected ReasoningBudget to be nil when not found, got %v", *req.ReasoningBudget)
+		}
+		if req.ReasoningEffort != "" {
+			t.Errorf("expected ReasoningEffort to be empty, got %q", req.ReasoningEffort)
+		}
+	})
+
+	t.Run("ErrorIgnored", func(t *testing.T) {
+		mu.Lock()
+		capturedRequests = nil
+		mu.Unlock()
+
+		tmpDir := t.TempDir()
+		llm := NewLLMClient(ts.URL, "key", "test-model", 5*time.Second)
+		eng := NewREPLEngine(llm, nil, tmpDir, "coder")
+		eng.SetPollInterval(10 * time.Millisecond)
+		eng.SetPriorityResolver(&StaticTaskResolver{
+			Priority: 1,
+			Found:    false,
+			Err:      errors.New("beads db locked"),
+		})
+
+		bus := runtime.NewEventBus()
+		state := runtime.NewSharedState(filepath.Join(tmpDir, "state.json"), "agent-test")
+		eng.AppendMessage(ChatMessage{Role: "user", Content: "Hello"})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		errChan := make(chan error, 1)
+		go func() {
+			errChan <- eng.Start(ctx, bus, state)
+		}()
+
+		for i := 0; i < 50; i++ {
+			time.Sleep(20 * time.Millisecond)
+			if state.Read().Status == "idle" {
+				break
+			}
+		}
+		cancel()
+		<-errChan
+
+		mu.Lock()
+		defer mu.Unlock()
+		if len(capturedRequests) == 0 {
+			t.Fatal("expected captured requests")
+		}
+		req := capturedRequests[0]
+		if req.ReasoningBudget != nil {
+			t.Errorf("expected ReasoningBudget to be nil on error, got %v", *req.ReasoningBudget)
+		}
+	})
+}
+
+func TestREPLEngine_PriorityResolver_Lifecycle(t *testing.T) {
+	tmpDir := t.TempDir()
+	llm := NewLLMClient("http://localhost:8080", "key", "test-model", 5*time.Second)
+	eng := NewREPLEngine(llm, nil, tmpDir, "coder")
+
+	// Default resolver should be BeadsTaskResolver
+	res := eng.PriorityResolver()
+	if res == nil {
+		t.Fatal("expected non-nil default PriorityResolver")
+	}
+	beadsRes, ok := res.(*BeadsTaskResolver)
+	if !ok {
+		t.Fatalf("expected BeadsTaskResolver, got %T", res)
+	}
+	if beadsRes.WorkspaceDir() != tmpDir {
+		t.Errorf("expected workspaceDir %s, got %s", tmpDir, beadsRes.WorkspaceDir())
+	}
+
+	// Override resolver
+	staticRes := NewStaticTaskResolver(2, true)
+	eng.SetPriorityResolver(staticRes)
+	if eng.PriorityResolver() != staticRes {
+		t.Errorf("expected PriorityResolver to be %v, got %v", staticRes, eng.PriorityResolver())
+	}
+}
+
+func TestREPLEngine_GetActiveSender(t *testing.T) {
+	eng := NewREPLEngine(nil, nil, "", "coder")
+	eng.setActiveSender("alice")
+	if eng.getActiveSender() != "alice" {
+		t.Errorf("expected getActiveSender() to return 'alice', got %q", eng.getActiveSender())
+	}
+}
+
+func TestChatCompletionRequest_ReasoningFieldsJSON(t *testing.T) {
+	budget := 0.75
+	req := ChatCompletionRequest{
+		Model:           "test-model",
+		ReasoningBudget: &budget,
+		ReasoningEffort: "medium",
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("failed to unmarshal request: %v", err)
+	}
+
+	if raw["reasoning_budget"] != 0.75 {
+		t.Errorf("expected reasoning_budget=0.75, got %v", raw["reasoning_budget"])
+	}
+	if raw["reasoning_effort"] != "medium" {
+		t.Errorf("expected reasoning_effort='medium', got %v", raw["reasoning_effort"])
+	}
+
+	// Test omitempty when nil/empty
+	reqEmpty := ChatCompletionRequest{Model: "test"}
+	dataEmpty, _ := json.Marshal(reqEmpty)
+	var rawEmpty map[string]any
+	_ = json.Unmarshal(dataEmpty, &rawEmpty)
+	if _, exists := rawEmpty["reasoning_budget"]; exists {
+		t.Error("expected reasoning_budget to be omitted when nil")
+	}
+	if _, exists := rawEmpty["reasoning_effort"]; exists {
+		t.Error("expected reasoning_effort to be omitted when empty")
 	}
 }

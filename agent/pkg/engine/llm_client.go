@@ -41,11 +41,13 @@ type ToolFunctionCall struct {
 
 // ChatCompletionRequest encapsulates the payload sent to /v1/chat/completions.
 type ChatCompletionRequest struct {
-	Model       string           `json:"model"`
-	Messages    []ChatMessage    `json:"messages"`
-	Tools       []map[string]any `json:"tools,omitempty"`
-	Temperature *float64         `json:"temperature,omitempty"`
-	MaxTokens   *int             `json:"max_tokens,omitempty"`
+	Model           string           `json:"model"`
+	Messages        []ChatMessage    `json:"messages"`
+	Tools           []map[string]any `json:"tools,omitempty"`
+	Temperature     *float64         `json:"temperature,omitempty"`
+	MaxTokens       *int             `json:"max_tokens,omitempty"`
+	ReasoningBudget *float64         `json:"reasoning_budget,omitempty"`
+	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
 }
 
 // ChatCompletionResponse models the response from /v1/chat/completions.
