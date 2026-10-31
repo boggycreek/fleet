@@ -168,6 +168,18 @@ func TestPromptAssemblyAndFormatting(t *testing.T) {
 	if !strings.Contains(prompt, "Focus on clean code.") {
 		t.Errorf("missing custom instructions: %s", prompt)
 	}
+	if !strings.Contains(prompt, "grep_search") {
+		t.Errorf("missing grep_search tool in prompt: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Targeted Line Inspection") {
+		t.Errorf("missing Targeted Line Inspection guidance in prompt: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Precise File Edits") {
+		t.Errorf("missing Precise File Edits guidance in prompt: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Test Failure Recovery") {
+		t.Errorf("missing Test Failure Recovery guidance in prompt: %s", prompt)
+	}
 
 	// Test event formatting
 	p0 := FormatEventMessage(runtime.Event{

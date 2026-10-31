@@ -289,7 +289,7 @@ func TestToolsParametersAndDescriptions(t *testing.T) {
 	reg := NewRegistry()
 	RegisterBuiltinTools(reg, tmpDir)
 
-	expectedOrder := []string{"bash", "edit_file", "list_dir", "read_file", "write_file"}
+	expectedOrder := []string{"bash", "edit_file", "grep_search", "list_dir", "read_file", "write_file"}
 	for _, name := range expectedOrder {
 		tool, ok := reg.Get(name)
 		if !ok {
@@ -304,10 +304,10 @@ func TestToolsParametersAndDescriptions(t *testing.T) {
 		}
 	}
 
-	// Schema conversion should succeed and contain 5 definitions in alphabetical order
+	// Schema conversion should succeed and contain 6 definitions in alphabetical order
 	openAITools := reg.ToOpenAITools()
-	if len(openAITools) != 5 {
-		t.Fatalf("expected 5 openAI tools, got %d", len(openAITools))
+	if len(openAITools) != 6 {
+		t.Fatalf("expected 6 openAI tools, got %d", len(openAITools))
 	}
 	for i, ot := range openAITools {
 		fn := ot["function"].(map[string]any)
@@ -632,5 +632,309 @@ func TestListDirTool(t *testing.T) {
 	_, err = ld.Execute(ctx, map[string]any{"path": "../escape"})
 	if err == nil {
 		t.Error("expected traversal error on list_dir")
+	}
+}
+
+func TestReadFile_LineRanges(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+	rf := &ReadFileTool{workspaceDir: tmpDir}
+
+	samplePath := filepath.Join(tmpDir, "multiline.txt")
+	sampleContent := "line one\nline two\nline three\nline four\nline five\n"
+	if err := os.WriteFile(samplePath, []byte(sampleContent), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// 1. Valid range (lines 2 to 4)
+	out, err := rf.Execute(ctx, map[string]any{
+		"path":       "multiline.txt",
+		"start_line": 2,
+		"end_line":   4,
+	})
+	if err != nil {
+		t.Fatalf("read_file failed: %v", err)
+	}
+	expected := "   2 | line two\n   3 | line three\n   4 | line four"
+	if out != expected {
+		t.Errorf("got %q, want %q", out, expected)
+	}
+
+	// 2. Only start_line (defaults end_line to end of file)
+	out, err = rf.Execute(ctx, map[string]any{
+		"path":       "multiline.txt",
+		"start_line": 4,
+	})
+	if err != nil {
+		t.Fatalf("read_file with only start_line failed: %v", err)
+	}
+	expected = "   4 | line four\n   5 | line five"
+	if out != expected {
+		t.Errorf("got %q, want %q", out, expected)
+	}
+
+	// 3. Only end_line (defaults start_line to 1)
+	out, err = rf.Execute(ctx, map[string]any{
+		"path":     "multiline.txt",
+		"end_line": 2,
+	})
+	if err != nil {
+		t.Fatalf("read_file with only end_line failed: %v", err)
+	}
+	expected = "   1 | line one\n   2 | line two"
+	if out != expected {
+		t.Errorf("got %q, want %q", out, expected)
+	}
+
+	// 4. Clamped end_line beyond file length
+	out, err = rf.Execute(ctx, map[string]any{
+		"path":       "multiline.txt",
+		"start_line": 4,
+		"end_line":   100,
+	})
+	if err != nil {
+		t.Fatalf("read_file with clamped end_line failed: %v", err)
+	}
+	expected = "   4 | line four\n   5 | line five"
+	if out != expected {
+		t.Errorf("got %q, want %q", out, expected)
+	}
+
+	// 5. Error: start_line > end_line
+	_, err = rf.Execute(ctx, map[string]any{
+		"path":       "multiline.txt",
+		"start_line": 4,
+		"end_line":   2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be greater than") {
+		t.Errorf("expected start_line > end_line error, got: %v", err)
+	}
+
+	// 6. Error: start_line beyond file length
+	_, err = rf.Execute(ctx, map[string]any{
+		"path":       "multiline.txt",
+		"start_line": 50,
+		"end_line":   60,
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds file line count") {
+		t.Errorf("expected start_line beyond file length error, got: %v", err)
+	}
+
+	// 7. Empty file handling
+	emptyPath := filepath.Join(tmpDir, "empty.txt")
+	_ = os.WriteFile(emptyPath, []byte(""), 0644)
+
+	// Empty file with start_line returns error
+	_, err = rf.Execute(ctx, map[string]any{
+		"path":       "empty.txt",
+		"start_line": 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds file line count") {
+		t.Errorf("expected line count error on empty file, got: %v", err)
+	}
+
+	// Empty file without start_line/end_line returns empty string
+	out, err = rf.Execute(ctx, map[string]any{"path": "empty.txt"})
+	if err != nil || out != "" {
+		t.Errorf("expected empty string on empty file, got %q, err=%v", out, err)
+	}
+
+	// 8. start_line and end_line <= 0 falls back to full content
+	out, err = rf.Execute(ctx, map[string]any{
+		"path":       "multiline.txt",
+		"start_line": -1,
+		"end_line":   0,
+	})
+	if err != nil || out != sampleContent {
+		t.Errorf("expected fallback to sampleContent, got %q, err=%v", out, err)
+	}
+
+	// 9. Numeric type variations for parseOptionalInt (int32, int64, float32, invalid string)
+	out, err = rf.Execute(ctx, map[string]any{
+		"path":       "multiline.txt",
+		"start_line": int32(2),
+		"end_line":   int64(3),
+	})
+	if err != nil || out != "   2 | line two\n   3 | line three" {
+		t.Errorf("expected lines 2-3 with int32/int64, got %q, err=%v", out, err)
+	}
+
+	out, err = rf.Execute(ctx, map[string]any{
+		"path":       "multiline.txt",
+		"start_line": float32(1),
+		"end_line":   "not-an-int",
+	})
+	if err != nil || !strings.Contains(out, "   1 | line one") {
+		t.Errorf("expected lines from 1 with float32 start and invalid end, got %q, err=%v", out, err)
+	}
+}
+
+func TestGrepSearchTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+	grep := &GrepSearchTool{workspaceDir: tmpDir}
+
+	// Create files and directory structure
+	// tmpDir/
+	//   file1.go ("package main\nfunc Hello() string {\nreturn \"world\"\n}")
+	//   file2.txt ("hello world\nHELLO FLEET\n")
+	//   sub/
+	//     nested.go ("func Greet() string {\nreturn \"hello\"\n}")
+	//   .git/
+	//     hidden.go ("func Hidden() string {\nreturn \"hello\"\n}")
+	//   vendor/
+	//     vendor.go ("func Vendor() string {\nreturn \"hello\"\n}")
+	//   node_modules/
+	//     mod.js ("console.log('hello')")
+	//   binary.bin (contains NUL byte)
+
+	_ = os.WriteFile(filepath.Join(tmpDir, "file1.go"), []byte("package main\n\nfunc Hello() string {\n\treturn \"world\"\n}\n"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("hello world\nHELLO FLEET\nthird line\n"), 0644)
+
+	subDir := filepath.Join(tmpDir, "sub")
+	_ = os.MkdirAll(subDir, 0755)
+	_ = os.WriteFile(filepath.Join(subDir, "nested.go"), []byte("func Greet() string {\n\treturn \"hello\"\n}\n"), 0644)
+
+	gitDir := filepath.Join(tmpDir, ".git")
+	_ = os.MkdirAll(gitDir, 0755)
+	_ = os.WriteFile(filepath.Join(gitDir, "hidden.go"), []byte("func Hidden() string {\n\treturn \"hello\"\n}\n"), 0644)
+
+	vendorDir := filepath.Join(tmpDir, "vendor")
+	_ = os.MkdirAll(vendorDir, 0755)
+	_ = os.WriteFile(filepath.Join(vendorDir, "vendor.go"), []byte("func Vendor() string {\n\treturn \"hello\"\n}\n"), 0644)
+
+	nodeDir := filepath.Join(tmpDir, "node_modules")
+	_ = os.MkdirAll(nodeDir, 0755)
+	_ = os.WriteFile(filepath.Join(nodeDir, "mod.js"), []byte("console.log('hello')"), 0644)
+
+	binData := []byte("plain text prefix\x00binary suffix with hello")
+	_ = os.WriteFile(filepath.Join(tmpDir, "binary.bin"), binData, 0644)
+
+	// 1. Validation errors
+	_, err := grep.Execute(ctx, map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "pattern argument is required") {
+		t.Errorf("expected missing pattern error, got: %v", err)
+	}
+
+	_, err = grep.Execute(ctx, map[string]any{"pattern": ""})
+	if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
+		t.Errorf("expected empty pattern error, got: %v", err)
+	}
+
+	_, err = grep.Execute(ctx, map[string]any{"pattern": "[invalid(regex"})
+	if err == nil || !strings.Contains(err.Error(), "invalid regular expression") {
+		t.Errorf("expected regex compilation error, got: %v", err)
+	}
+
+	_, err = grep.Execute(ctx, map[string]any{"pattern": "test", "path": "../outside"})
+	if err == nil || !errors.Is(err, ErrPathEscapesWorkspace) {
+		t.Errorf("expected ErrPathEscapesWorkspace, got: %v", err)
+	}
+
+	_, err = grep.Execute(ctx, map[string]any{"pattern": "test", "path": "does-not-exist"})
+	if err == nil || !strings.Contains(err.Error(), "failed to stat path") {
+		t.Errorf("expected stat error on non-existent path, got: %v", err)
+	}
+
+	// 2. Default case-insensitive search across directory
+	out, err := grep.Execute(ctx, map[string]any{
+		"pattern": "HELLO",
+	})
+	if err != nil {
+		t.Fatalf("grep failed: %v", err)
+	}
+
+	// Should match file1.go, file2.txt, sub/nested.go
+	if !strings.Contains(out, "file1.go:3: func Hello() string {") {
+		t.Errorf("expected match in file1.go, got:\n%s", out)
+	}
+	if !strings.Contains(out, "file2.txt:1: hello world") || !strings.Contains(out, "file2.txt:2: HELLO FLEET") {
+		t.Errorf("expected matches in file2.txt, got:\n%s", out)
+	}
+	if !strings.Contains(out, "sub/nested.go:2: \treturn \"hello\"") {
+		t.Errorf("expected match in sub/nested.go, got:\n%s", out)
+	}
+
+	// Must NOT match hidden, vendor, node_modules, or binary files
+	if strings.Contains(out, ".git") {
+		t.Errorf("unexpected match inside .git directory:\n%s", out)
+	}
+	if strings.Contains(out, "vendor") {
+		t.Errorf("unexpected match inside vendor directory:\n%s", out)
+	}
+	if strings.Contains(out, "node_modules") {
+		t.Errorf("unexpected match inside node_modules directory:\n%s", out)
+	}
+	if strings.Contains(out, "binary.bin") {
+		t.Errorf("unexpected match inside binary.bin:\n%s", out)
+	}
+
+	// 3. Case-sensitive search
+	outCS, err := grep.Execute(ctx, map[string]any{
+		"pattern":        "HELLO",
+		"case_sensitive": true,
+	})
+	if err != nil {
+		t.Fatalf("case sensitive grep failed: %v", err)
+	}
+	if strings.Contains(outCS, "file2.txt:1: hello world") {
+		t.Errorf("unexpected lowercase match in case-sensitive mode:\n%s", outCS)
+	}
+	if !strings.Contains(outCS, "file2.txt:2: HELLO FLEET") {
+		t.Errorf("expected uppercase match in file2.txt, got:\n%s", outCS)
+	}
+
+	// 4. Search single file directly
+	outSingle, err := grep.Execute(ctx, map[string]any{
+		"pattern": "package",
+		"path":    "file1.go",
+	})
+	if err != nil {
+		t.Fatalf("single file grep failed: %v", err)
+	}
+	if !strings.Contains(outSingle, "file1.go:1: package main") {
+		t.Errorf("expected match in file1.go, got:\n%s", outSingle)
+	}
+
+	// 5. Max results limit
+	outLimit, err := grep.Execute(ctx, map[string]any{
+		"pattern":     "hello",
+		"max_results": 2,
+	})
+	if err != nil {
+		t.Fatalf("max_results grep failed: %v", err)
+	}
+	lines := strings.Split(outLimit, "\n")
+	if len(lines) != 2 {
+		t.Errorf("expected exactly 2 matching lines, got %d:\n%s", len(lines), outLimit)
+	}
+
+	// 6. No matches returns empty string
+	outNone, err := grep.Execute(ctx, map[string]any{
+		"pattern": "nonexistent_symbol_12345",
+	})
+	if err != nil {
+		t.Fatalf("grep failed on no match: %v", err)
+	}
+	if outNone != "" {
+		t.Errorf("expected empty string on no matches, got: %q", outNone)
+	}
+
+	// 7. Binary file passed as direct path is skipped
+	outBin, err := grep.Execute(ctx, map[string]any{
+		"pattern": "plain",
+		"path":    "binary.bin",
+	})
+	if err != nil {
+		t.Fatalf("binary file direct grep failed: %v", err)
+	}
+	if outBin != "" {
+		t.Errorf("expected empty string for binary file, got: %q", outBin)
+	}
+
+	// 8. Direct isBinaryFile error check
+	isBin, err := isBinaryFile(filepath.Join(tmpDir, "does-not-exist.bin"))
+	if err == nil || isBin {
+		t.Errorf("expected error from isBinaryFile on non-existent file, got %v, %v", isBin, err)
 	}
 }
