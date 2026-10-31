@@ -46,8 +46,9 @@ func TestEnrollmentSecretsFormatEnv(t *testing.T) {
 		ValkeyPassword:     "secretpass123",
 		ForgejoURL:         "http://192.168.1.100:3000",
 		OpenAIBaseURL:      "http://192.168.1.100:8080/v1",
-		OpenAIModel:        "qwen2.5-coder",
-		OpenAIAPIKey:       "sk-local",
+		OpenAIModel:            "qwen2.5-coder",
+		OpenAIAPIKey:           "sk-local",
+		ControllerSSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI controller@fleet",
 	}
 
 	envStr := sec.FormatEnv()
@@ -71,6 +72,12 @@ func TestEnrollmentSecretsFormatEnv(t *testing.T) {
 	}
 	if !strings.Contains(envStr, `BP_SIGNING_KEY_PEM=`) {
 		t.Errorf("expected BP_SIGNING_KEY_PEM in envStr: %s", envStr)
+	}
+	if !strings.Contains(envStr, `BP_SIGNING_KEY_B64=`) {
+		t.Errorf("expected BP_SIGNING_KEY_B64 in envStr: %s", envStr)
+	}
+	if !strings.Contains(envStr, `CONTROLLER_SSH_PUB_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI controller@fleet"`) {
+		t.Errorf("expected CONTROLLER_SSH_PUB_KEY in envStr: %s", envStr)
 	}
 }
 
@@ -320,6 +327,30 @@ func TestEnrollmentServerBinaryServing(t *testing.T) {
 		if respInvalid.StatusCode != http.StatusBadRequest {
 			t.Errorf("expected 400 for invalid binary name, got %d", respInvalid.StatusCode)
 		}
+	}
+
+	// 4. Burn token via enrollment, verify binary still downloads successfully (grace period)
+	enrollResp, err := client.Get(srv.URL("127.0.0.1") + "/api/v1/enroll/bin-agent?token=tok")
+	if err != nil {
+		t.Fatalf("failed enroll: %v", err)
+	}
+	_ = enrollResp.Body.Close()
+	if enrollResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 enroll, got %d", enrollResp.StatusCode)
+	}
+	if !srv.TokenBurned() {
+		t.Errorf("expected token to be burned")
+	}
+
+	// Verify binary download still succeeds after token is burned
+	respAfterBurn, err := client.Get(srv.URL("127.0.0.1") + "/bin/fleet-agent")
+	if err != nil {
+		t.Fatalf("failed fetching fleet-agent after token burned: %v", err)
+	}
+	dataAfter, _ := io.ReadAll(respAfterBurn.Body)
+	_ = respAfterBurn.Body.Close()
+	if respAfterBurn.StatusCode != http.StatusOK || !strings.Contains(string(dataAfter), "echo agent") {
+		t.Errorf("expected 200 OK for binary after token burned, got %d", respAfterBurn.StatusCode)
 	}
 }
 

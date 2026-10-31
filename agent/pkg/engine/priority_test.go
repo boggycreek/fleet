@@ -156,6 +156,28 @@ func TestBeadsTaskResolver_SurroundingText(t *testing.T) {
 	}
 }
 
+func TestBeadsTaskResolver_LogPrefixesWithBrackets(t *testing.T) {
+	outputWithLogBrackets := `[WARNING] Dolt remote unreachable, falling back to local cache
+[INFO] Scanning workspace issues
+[
+	{"id": "sndbx-wcp", "status": "in_progress", "priority": 1}
+]
+[INFO] Command completed in 12ms`
+
+	resolver := NewBeadsTaskResolver("")
+	resolver.SetCommandRunner(func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+		return []byte(outputWithLogBrackets), nil
+	})
+
+	prio, found, err := resolver.GetActiveTaskPriority(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found || prio != 1 {
+		t.Errorf("expected found=true, prio=1; got found=%v, prio=%d", found, prio)
+	}
+}
+
 func TestBeadsTaskResolver_NoActiveTask(t *testing.T) {
 	jsonOutput := `[
 		{"id": "sndbx-1", "status": "closed", "priority": 1},

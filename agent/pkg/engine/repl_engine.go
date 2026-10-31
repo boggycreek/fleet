@@ -418,6 +418,19 @@ func (e *REPLEngine) executeTurn(ctx context.Context, bus *runtime.EventBus, sta
 	maxTurns := e.maxTurns
 	e.mu.RUnlock()
 
+	var (
+		cachedBudget *float64
+		cachedEffort string
+	)
+	if resolver := e.getPriorityResolver(); resolver != nil {
+		if prio, found, err := resolver.GetActiveTaskPriority(ctx); err == nil && found {
+			budget, effort := MapPriorityToReasoning(prio)
+			cachedBudget = &budget
+			cachedEffort = effort
+			fmt.Printf("[repl] Active task priority P%d -> reasoning_budget=%.2f, reasoning_effort=%s\n", prio, budget, effort)
+		}
+	}
+
 	didSendExternalMessage := false
 	executedToolCalls := make(map[string]string)
 
@@ -461,18 +474,11 @@ func (e *REPLEngine) executeTurn(ctx context.Context, bus *runtime.EventBus, sta
 		}
 
 		req := ChatCompletionRequest{
-			Model:    e.llm.Model(),
-			Messages: msgs,
-			Tools:    openAITools,
-		}
-
-		if resolver := e.getPriorityResolver(); resolver != nil {
-			if prio, found, err := resolver.GetActiveTaskPriority(ctx); err == nil && found {
-				budget, effort := MapPriorityToReasoning(prio)
-				req.ReasoningBudget = &budget
-				req.ReasoningEffort = effort
-				fmt.Printf("[repl] Active task priority P%d -> reasoning_budget=%.2f, reasoning_effort=%s\n", prio, budget, effort)
-			}
+			Model:           e.llm.Model(),
+			Messages:        msgs,
+			Tools:           openAITools,
+			ReasoningBudget: cachedBudget,
+			ReasoningEffort: cachedEffort,
 		}
 
 		resp, err := e.llm.ChatCompletion(ctx, req)

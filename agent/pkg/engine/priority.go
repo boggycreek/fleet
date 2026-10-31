@@ -6,7 +6,6 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -112,14 +111,24 @@ func (b *BeadsTaskResolver) GetActiveTaskPriority(ctx context.Context) (int, boo
 
 	var items []beadsTaskItem
 	if err := json.Unmarshal(out, &items); err != nil {
-		// Attempt to parse array if surrounded by logs or warnings
-		start := bytes.IndexByte(out, '[')
-		end := bytes.LastIndexByte(out, ']')
-		if start >= 0 && end > start {
-			if err2 := json.Unmarshal(out[start:end+1], &items); err2 != nil {
-				return 0, false, fmt.Errorf("failed to parse bd list --json output: %w", err)
+		// Attempt to extract JSON array if surrounded by log lines or prefixes (e.g. [WARNING], [INFO])
+		parsed := false
+		for i := 0; i < len(out); i++ {
+			if out[i] == '[' {
+				for j := len(out) - 1; j > i; j-- {
+					if out[j] == ']' {
+						if err2 := json.Unmarshal(out[i:j+1], &items); err2 == nil {
+							parsed = true
+							break
+						}
+					}
+				}
+				if parsed {
+					break
+				}
 			}
-		} else {
+		}
+		if !parsed {
 			return 0, false, fmt.Errorf("failed to parse bd list --json output: %w", err)
 		}
 	}

@@ -77,9 +77,18 @@ var inferenceHTTPClient = &http.Client{Timeout: 1 * time.Second}
 // inferenceCandidateURLs resolves endpoints to probe for a local llama-server.
 func inferenceCandidateURLs() []string {
 	if env := strings.TrimSpace(os.Getenv("LLM_GATEWAY_URL")); env != "" {
-		cleaned := strings.TrimRight(env, "/")
-		cleaned = strings.TrimSuffix(cleaned, "/v1")
-		return []string{cleaned}
+		var candidates []string
+		for _, part := range strings.Split(env, ",") {
+			cleaned := strings.TrimSpace(part)
+			cleaned = strings.TrimRight(cleaned, "/")
+			cleaned = strings.TrimSuffix(cleaned, "/v1")
+			if cleaned != "" {
+				candidates = append(candidates, cleaned)
+			}
+		}
+		if len(candidates) > 0 {
+			return candidates
+		}
 	}
 	return []string{
 		"http://127.0.0.1:11434",
@@ -92,6 +101,7 @@ func inferenceCandidateURLs() []string {
 // It verifies /health and inspects slot allocation via /slots.
 func checkLocalInferenceSlots(ctx context.Context, report *DoctorReport) {
 	candidates := inferenceCandidateURLs()
+	var lastWarning *CheckItem
 
 	for _, targetURL := range candidates {
 		// 1. Check /health
@@ -118,13 +128,12 @@ func checkLocalInferenceSlots(ctx context.Context, report *DoctorReport) {
 
 		if resp.StatusCode != http.StatusOK {
 			_ = resp.Body.Close()
-			report.Checks = append(report.Checks, CheckItem{
+			lastWarning = &CheckItem{
 				Name:    "Local LLM Inference Slots",
 				Status:  StatusWarning,
 				Message: fmt.Sprintf("Local LLM inference server at %s returned unexpected /health HTTP status %d", targetURL, resp.StatusCode),
-			})
-			report.WarningCount++
-			return
+			}
+			continue
 		}
 		_ = resp.Body.Close()
 
@@ -132,58 +141,53 @@ func checkLocalInferenceSlots(ctx context.Context, report *DoctorReport) {
 		slotsURL := targetURL + "/slots"
 		slotsReq, err := http.NewRequestWithContext(ctx, http.MethodGet, slotsURL, nil)
 		if err != nil {
-			report.Checks = append(report.Checks, CheckItem{
+			lastWarning = &CheckItem{
 				Name:    "Local LLM Inference Slots",
 				Status:  StatusWarning,
 				Message: fmt.Sprintf("Failed creating request for %s: %v", slotsURL, err),
-			})
-			report.WarningCount++
-			return
+			}
+			continue
 		}
 
 		slotsResp, err := inferenceHTTPClient.Do(slotsReq)
 		if err != nil {
-			report.Checks = append(report.Checks, CheckItem{
+			lastWarning = &CheckItem{
 				Name:    "Local LLM Inference Slots",
 				Status:  StatusWarning,
 				Message: fmt.Sprintf("Local LLM inference server at %s /slots unreachable: %v", targetURL, err),
-			})
-			report.WarningCount++
-			return
+			}
+			continue
 		}
 
 		if slotsResp.StatusCode != http.StatusOK {
 			_ = slotsResp.Body.Close()
-			report.Checks = append(report.Checks, CheckItem{
+			lastWarning = &CheckItem{
 				Name:    "Local LLM Inference Slots",
 				Status:  StatusWarning,
 				Message: fmt.Sprintf("Local LLM inference server at %s returned unexpected /slots HTTP status %d", targetURL, slotsResp.StatusCode),
-			})
-			report.WarningCount++
-			return
+			}
+			continue
 		}
 
 		body, err := io.ReadAll(io.LimitReader(slotsResp.Body, 1024*1024))
 		_ = slotsResp.Body.Close()
 		if err != nil {
-			report.Checks = append(report.Checks, CheckItem{
+			lastWarning = &CheckItem{
 				Name:    "Local LLM Inference Slots",
 				Status:  StatusWarning,
 				Message: fmt.Sprintf("Failed reading /slots payload from %s: %v", targetURL, err),
-			})
-			report.WarningCount++
-			return
+			}
+			continue
 		}
 
 		summary, err := ParseLlamaSlots(body)
 		if err != nil {
-			report.Checks = append(report.Checks, CheckItem{
+			lastWarning = &CheckItem{
 				Name:    "Local LLM Inference Slots",
 				Status:  StatusWarning,
 				Message: fmt.Sprintf("Local LLM inference server at %s returned unparseable /slots JSON: %v", targetURL, err),
-			})
-			report.WarningCount++
-			return
+			}
+			continue
 		}
 
 		if summary.TotalSlots == 0 {
@@ -218,6 +222,12 @@ func checkLocalInferenceSlots(ctx context.Context, report *DoctorReport) {
 			Status:  StatusOK,
 			Message: msg,
 		})
+		return
+	}
+
+	if lastWarning != nil {
+		report.Checks = append(report.Checks, *lastWarning)
+		report.WarningCount++
 		return
 	}
 

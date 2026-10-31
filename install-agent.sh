@@ -108,17 +108,21 @@ if [[ "${EUID}" -eq 0 ]]; then
     fi
 
     # Materialize script to a temporary executable to run under target user
-    TMP_SCRIPT="/tmp/fleet-install-$$.sh"
+    TMP_SCRIPT=$(mktemp "${USER_HOME}/.fleet-install-XXXXXX.sh" 2>/dev/null || mktemp /tmp/fleet-install-XXXXXX.sh)
     if [[ -f "$0" ]]; then
         cp "$0" "${TMP_SCRIPT}"
     else
         curl -sSf "${ENROLL_SERVER}/install/${AGENT_NAME}?token=${ENROLL_TOKEN}" -o "${TMP_SCRIPT}"
     fi
     chmod 0755 "${TMP_SCRIPT}"
-    chown "${TARGET_USER}:${TARGET_USER}" "${TMP_SCRIPT}"
+    chown -h "${TARGET_USER}:${TARGET_USER}" "${TMP_SCRIPT}"
 
     echo "==> Dropping privileges to '${TARGET_USER}' to complete userspace setup..."
-    su - "${TARGET_USER}" -c "${TMP_SCRIPT} --server '${ENROLL_SERVER}' --token '${ENROLL_TOKEN}' --name '${AGENT_NAME}'"
+    # shellcheck disable=SC2016,SC2097,SC2098
+    ENROLL_SERVER="${ENROLL_SERVER}" ENROLL_TOKEN="${ENROLL_TOKEN}" AGENT_NAME="${AGENT_NAME}" \
+    su - "${TARGET_USER}" -s /bin/bash -- -c \
+      'ENROLL_SERVER="$1" ENROLL_TOKEN="$2" AGENT_NAME="$3" "$4"' \
+      -- "${ENROLL_SERVER}" "${ENROLL_TOKEN}" "${AGENT_NAME}" "${TMP_SCRIPT}"
     rm -f "${TMP_SCRIPT}"
     exit 0
 fi
@@ -151,9 +155,32 @@ if [[ "${HTTP_STATUS}" -ne 200 ]]; then
 fi
 chmod 0600 "${ENV_FILE}"
 
+# Authorize controller SSH public key if provided in agent.env
+if grep -q "^CONTROLLER_SSH_PUB_KEY=" "${ENV_FILE}"; then
+    CONTROLLER_PUB_KEY=$(grep "^CONTROLLER_SSH_PUB_KEY=" "${ENV_FILE}" | cut -d'"' -f2)
+    if [[ -n "${CONTROLLER_PUB_KEY}" ]]; then
+        SSH_DIR="${HOME}/.ssh"
+        AUTH_KEYS="${SSH_DIR}/authorized_keys"
+        mkdir -p "${SSH_DIR}"
+        chmod 0700 "${SSH_DIR}"
+        touch "${AUTH_KEYS}"
+        chmod 0600 "${AUTH_KEYS}"
+        if ! grep -qF "${CONTROLLER_PUB_KEY}" "${AUTH_KEYS}" 2>/dev/null; then
+            echo "${CONTROLLER_PUB_KEY}" >> "${AUTH_KEYS}"
+            echo "==> Authorized controller SSH public key in ${AUTH_KEYS}"
+        fi
+    fi
+fi
+
 # Extract signing key PEM if present in agent.env
 KEY_FILE="${CONFIG_DIR}/signing-key.pem"
-if grep -q "BP_SIGNING_KEY_PEM=" "${ENV_FILE}"; then
+if grep -q "^BP_SIGNING_KEY_B64=" "${ENV_FILE}"; then
+    grep "^BP_SIGNING_KEY_B64=" "${ENV_FILE}" | cut -d'"' -f2 | base64 -d > "${KEY_FILE}"
+    chmod 0600 "${KEY_FILE}"
+    if ! grep -q "^BP_SIGNING_KEY=" "${ENV_FILE}"; then
+        echo "BP_SIGNING_KEY=${KEY_FILE}" >> "${ENV_FILE}"
+    fi
+elif grep -q "BP_SIGNING_KEY_PEM=" "${ENV_FILE}"; then
     sed -n '/BP_SIGNING_KEY_PEM="/,/^"/p' "${ENV_FILE}" | \
         sed 's/BP_SIGNING_KEY_PEM="//' | sed 's/"$//' > "${KEY_FILE}"
     chmod 0600 "${KEY_FILE}"
@@ -244,6 +271,8 @@ echo "==> Installed systemd user service: ${SERVICE_FILE}"
 
 # 5. Enable and start user service
 if command -v systemctl >/dev/null 2>&1; then
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
     echo "==> Reloading systemd user daemon and starting fleet-agent service..."
     systemctl --user daemon-reload
     systemctl --user enable --now fleet-agent.service

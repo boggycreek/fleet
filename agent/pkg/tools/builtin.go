@@ -224,13 +224,14 @@ func (t *ReadFileTool) Execute(_ context.Context, args map[string]any) (string, 
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
 
+	if len(content) == 0 {
+		return "", nil
+	}
+
 	startLine, hasStart := parseOptionalInt(args["start_line"])
 	endLine, hasEnd := parseOptionalInt(args["end_line"])
 
 	if (hasStart && startLine > 0) || (hasEnd && endLine > 0) {
-		if len(content) == 0 {
-			return "", fmt.Errorf("start_line (%d) exceeds file line count (0)", startLine)
-		}
 		raw := string(content)
 		raw = strings.TrimSuffix(raw, "\r\n")
 		raw = strings.TrimSuffix(raw, "\n")
@@ -264,16 +265,16 @@ func (t *ReadFileTool) Execute(_ context.Context, args map[string]any) (string, 
 
 	lines := strings.Split(string(content), "\n")
 	start := 0
-	if offset, ok := args["offset"].(float64); ok && offset > 1 {
-		start = int(offset) - 1
+	if offset, ok := parseOptionalInt(args["offset"]); ok && offset > 1 {
+		start = offset - 1
 		if start >= len(lines) {
 			return "", nil
 		}
 	}
 
 	end := len(lines)
-	if limit, ok := args["limit"].(float64); ok && limit > 0 {
-		end = start + int(limit)
+	if limit, ok := parseOptionalInt(args["limit"]); ok && limit > 0 {
+		end = start + limit
 		if end > len(lines) {
 			end = len(lines)
 		}
@@ -510,7 +511,9 @@ func (t *GrepSearchTool) Parameters() map[string]any {
 
 var errMaxResultsReached = errors.New("max results reached")
 
-func (t *GrepSearchTool) Execute(_ context.Context, args map[string]any) (string, error) {
+const maxGrepLineLength = 4096
+
+func (t *GrepSearchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	pattern, ok := args["pattern"].(string)
 	if !ok || pattern == "" {
 		return "", errors.New("pattern argument is required and cannot be empty")
@@ -562,6 +565,11 @@ func (t *GrepSearchTool) Execute(_ context.Context, args map[string]any) (string
 	}
 
 	err = filepath.WalkDir(resolvedPath, func(p string, d os.DirEntry, err error) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if err != nil {
 			return nil
 		}
@@ -629,15 +637,36 @@ func searchFile(filePath, relPath string, re *regexp.Regexp, maxResults int, cur
 		if len(*currentResults) >= maxResults {
 			return errMaxResultsReached
 		}
-		line, err := reader.ReadString('\n')
-		if len(line) > 0 {
-			cleanLine := strings.TrimRight(line, "\r\n")
+		var lineBuf []byte
+		var readErr error
+		for {
+			chunk, isPrefix, err := reader.ReadLine()
+			if len(chunk) > 0 {
+				if len(lineBuf) < maxGrepLineLength {
+					remaining := maxGrepLineLength - len(lineBuf)
+					if len(chunk) > remaining {
+						lineBuf = append(lineBuf, chunk[:remaining]...)
+					} else {
+						lineBuf = append(lineBuf, chunk...)
+					}
+				}
+			}
+			if err != nil {
+				readErr = err
+				break
+			}
+			if !isPrefix {
+				break
+			}
+		}
+		if len(lineBuf) > 0 || readErr == nil {
+			cleanLine := strings.TrimRight(string(lineBuf), "\r\n")
 			if re.MatchString(cleanLine) {
 				*currentResults = append(*currentResults, fmt.Sprintf("%s:%d: %s", relPath, lineNum, cleanLine))
 			}
 			lineNum++
 		}
-		if err != nil {
+		if readErr != nil {
 			break
 		}
 	}

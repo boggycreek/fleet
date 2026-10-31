@@ -724,13 +724,13 @@ func TestReadFile_LineRanges(t *testing.T) {
 	emptyPath := filepath.Join(tmpDir, "empty.txt")
 	_ = os.WriteFile(emptyPath, []byte(""), 0644)
 
-	// Empty file with start_line returns error
-	_, err = rf.Execute(ctx, map[string]any{
+	// Empty file with start_line returns empty string without error
+	out, err = rf.Execute(ctx, map[string]any{
 		"path":       "empty.txt",
 		"start_line": 1,
 	})
-	if err == nil || !strings.Contains(err.Error(), "exceeds file line count") {
-		t.Errorf("expected line count error on empty file, got: %v", err)
+	if err != nil || out != "" {
+		t.Errorf("expected empty string on empty file, got %q, err=%v", out, err)
 	}
 
 	// Empty file without start_line/end_line returns empty string
@@ -766,6 +766,25 @@ func TestReadFile_LineRanges(t *testing.T) {
 	})
 	if err != nil || !strings.Contains(out, "   1 | line one") {
 		t.Errorf("expected lines from 1 with float32 start and invalid end, got %q, err=%v", out, err)
+	}
+
+	// 10. Offset and limit with int and float64
+	out, err = rf.Execute(ctx, map[string]any{
+		"path":   "multiline.txt",
+		"offset": 2,
+		"limit":  2,
+	})
+	if err != nil || out != "line two\nline three" {
+		t.Errorf("expected lines 2-3 with int offset/limit, got %q, err=%v", out, err)
+	}
+
+	out, err = rf.Execute(ctx, map[string]any{
+		"path":   "multiline.txt",
+		"offset": float64(2),
+		"limit":  float64(2),
+	})
+	if err != nil || out != "line two\nline three" {
+		t.Errorf("expected lines 2-3 with float64 offset/limit, got %q, err=%v", out, err)
 	}
 }
 
@@ -936,5 +955,24 @@ func TestGrepSearchTool(t *testing.T) {
 	isBin, err := isBinaryFile(filepath.Join(tmpDir, "does-not-exist.bin"))
 	if err == nil || isBin {
 		t.Errorf("expected error from isBinaryFile on non-existent file, got %v, %v", isBin, err)
+	}
+
+	// 9. Context cancellation in GrepSearchTool
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = grep.Execute(cancelCtx, map[string]any{"pattern": "hello"})
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled error, got: %v", err)
+	}
+
+	// 10. Long line (> 4096 bytes) searchFile line capping
+	longLine := "MATCH_START " + strings.Repeat("A", 5000) + " MATCH_END\n"
+	_ = os.WriteFile(filepath.Join(tmpDir, "longline.txt"), []byte(longLine), 0644)
+	outLong, err := grep.Execute(ctx, map[string]any{"pattern": "MATCH_START", "path": "longline.txt"})
+	if err != nil {
+		t.Fatalf("grep failed on long line: %v", err)
+	}
+	if !strings.Contains(outLong, "longline.txt:1: MATCH_START") {
+		t.Errorf("expected match for long line, got: %q", outLong)
 	}
 }
