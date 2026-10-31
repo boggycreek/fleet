@@ -157,7 +157,7 @@ Task-oriented guides and step-by-step workflows are available in `doc/how-to/`:
 Detailed architectural specifications, developer protocols, and decision records:
 
 - **[AGENTS.md](AGENTS.md)**: Platform runtime guide covering messaging protocols, local inference gateway, security boundaries, and engineering gates.
-- **[AI Agent Knowledge Base](doc/ai/README.md)**: Technical guides for autonomous coding agents (`dev-workflow.md`, `architecture.md`, `doctor-diagnostics.md`, `image-resolution.md`, `testing-guidelines.md`, `code-review.md`).
+- **[AI Agent Knowledge Base](doc/ai/README.md)**: Technical guides and specifications for autonomous coding agents, organized into self-indexing domains (`guidelines/`, `specs/`, `evaluations/`, and `audits/`).
 - **[Developer Setup & Contributing Guide](CONTRIBUTING.md)**: Workstation setup (`setup.sh`), environment doctor (`setup.sh --doctor`), quality gates, and Beads workflow.
 - **[Architecture Decision Records](doc/adr/README.md)**: Complete index of architectural decision records (`00001` through `00056`).
 

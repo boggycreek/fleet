@@ -53,14 +53,22 @@ fleet/
 
 ## Agent Knowledge Base (`doc/ai/`)
 
-For in-depth architectural specifications and operational protocols, refer to the progressive disclosure documents:
-- **[Development Workflow & PR Protocol](doc/ai/dev-workflow.md)**: Branching, PR requirements, conventional commits, quality gates checklist.
-- **[Architecture & Runtime](doc/ai/architecture.md)**: Podman isolation, security boundary, layered OCI hierarchy, local LLM gateway.
-- **[OCI Image Resolution & Tagging](doc/ai/image-resolution.md)**: 3-tier image resolution, well-known presets, local store discovery, remote OCI refs (ADR 00029).
-- **[Testing Guidelines & Coverage Gates](doc/ai/testing-guidelines.md)**: Strict >=90% test coverage enforcement, rootless Podman cleanup patterns, containerized smoke testing.
-- **[Diagnostic Doctor & Auto-Healing](doc/ai/doctor-diagnostics.md)**: `fleet agent doctor` and `fleet infra doctor` diagnostic checks and self-healing.
-- **[Code Review Protocol](doc/ai/code-review.md)**: Architectural, logical, and security review methodology, inspection checklist, and PR reporting format.
-- **[Jules Collaboration & PR Review Protocol](doc/ai/jules-collaboration.md)**: Delegating tasks via GitHub issues, monitoring progress, and conducting adversarial PR reviews.
+For in-depth architectural specifications and operational protocols, refer to the progressive disclosure directories:
+- **[Operational Guidelines](doc/ai/guidelines/README.md)**:
+  - **[Development Workflow & PR Protocol](doc/ai/guidelines/dev-workflow.md)**: Branching, PR requirements, conventional commits, quality gates checklist.
+  - **[Code Review Protocol & 2-Agent PR Separation](doc/ai/guidelines/code-review.md)**: Architectural, logical, and security review methodology, inspection checklist, and mandatory 2-agent PR separation.
+  - **[Testing Guidelines & Coverage Gates](doc/ai/guidelines/testing-guidelines.md)**: Strict >=90% test coverage enforcement, rootless Podman cleanup patterns, containerized smoke testing.
+  - **[Diagnostic Doctor & Auto-Healing](doc/ai/guidelines/doctor-diagnostics.md)**: `fleet agent doctor` and `fleet infra doctor` diagnostic checks and self-healing.
+  - **[OCI Image Resolution & Tagging](doc/ai/guidelines/image-resolution.md)**: 3-tier image resolution, well-known presets, local store discovery, remote OCI refs (ADR 00029).
+  - **[Language Best Practices](doc/ai/guidelines/language-best-practices.md)**: Idiomatic coding style and standards for Go, Shell, YAML, and Dockerfiles.
+  - **[Jules Collaboration & PR Review Protocol](doc/ai/guidelines/jules-collaboration.md)**: Delegating tasks via GitHub issues, monitoring progress, and conducting adversarial PR reviews.
+- **[Architecture & Subsystem Specifications](doc/ai/specs/README.md)**:
+  - **[Architecture & Runtime](doc/ai/specs/architecture.md)**: Podman isolation, security boundary, layered OCI hierarchy, local LLM gateway.
+  - **[Memory Subsystem Spec](doc/ai/specs/memory-subsystem-spec.md)**: Lexical BM25 indexing and cognitive memory pipelines.
+  - **[Podman Pod Co-Location](doc/ai/specs/podman-pod-colocation.md)**: Dedicated pods, localhost IPC, and network namespaces.
+  - **[VS Code Extension Design](doc/ai/specs/vscode-extension-design.md)**: Architecture and UX design guide for Fleet VS Code extension with Remote-SSH attach.
+- **[Hardware & Inference Evaluations](doc/ai/evaluations/README.md)**: 128k KV cache scaling (ADR 00055), distributed inference (`exo`), MoE inference, and hardware benchmarks.
+- **[Security Audits & Findings](doc/ai/audits/README.md)**: Backplane audit, MCP suite security audit, shell/CI reviews.
 - **[Workstation Setup & Contributor Guide](CONTRIBUTING.md)**: Automated `setup.sh`, XDG multi-version Go management, `--doctor` health check, quality gates, and Beads (`bd`) task tracking.
 
 ---
@@ -171,6 +179,14 @@ All code changes in this repository must adhere to the following standards:
 
 6. **Subagent Delegation Preference**:
    - Long-running tasks, deep research, code reviews, and background implementation workflows should be delegated to subagents so the primary conversation loop remains responsive and unoccupied for ongoing user interaction.
+
+7. **Strict 2-Agent PR Separation**:
+   - The subagent or developer authoring or committing the code for a PR must never review or approve its own PR.
+   - An independent adversarial reviewer subagent (`adversarial-reviewer`) must be spawned with clean context to perform an out-of-band audit and post the review comment.
+   - Merging is strictly blocked until the independent reviewer renders an assessment of **GO**.
+
+8. **Documentation Taxonomy Integrity**:
+   - Keep `doc/ai/` organized. Operational guidelines belong in `doc/ai/guidelines/`, specifications in `doc/ai/specs/`, spike evaluations and benchmarks in `doc/ai/evaluations/`, and security audits in `doc/ai/audits/`. Each child directory maintains its own self-indexing `README.md`. Child directories can be updated independently without mutating parent index files.
 
 ---
 
