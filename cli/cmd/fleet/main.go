@@ -154,6 +154,7 @@ Infra Commands:
   %s infra list
   %s infra info [--show-secrets] [--json]
   %s infra doctor
+  %s infra topology [list|show <preset>|args <preset>]
 
 Image Commands:
   %s image list [--json]
@@ -170,5 +171,5 @@ Update Command:
   %s update
 
 Run '%s <domain> help' for more details on each command.
-`, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin)
+`, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin, bin)
 }

@@ -46,6 +46,9 @@ func DiagnoseAndHealInfra(ctx context.Context, paths config.Paths) (*DoctorRepor
 	// 8. OpenRouter Inference Proxy Gateway Container & Service
 	checkAndHealOpenRouterContainer(ctx, paths, report)
 
+	// 9. Local LLM Host Inference Gateway / Slots
+	checkLocalInferenceSlots(ctx, report)
+
 	return report, nil
 }
 

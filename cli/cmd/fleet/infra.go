@@ -22,7 +22,7 @@ import (
 func handleInfra(ctx context.Context, paths config.Paths, args []string, stdout, stderr io.Writer) int {
 	bin := binaryName()
 	if len(args) == 0 {
-		fmt.Fprintf(stderr, "Usage: %s infra <up|down|list|info|doctor>\n", bin)
+		fmt.Fprintf(stderr, "Usage: %s infra <up|down|list|info|doctor|topology>\n", bin)
 		return 1
 	}
 
@@ -32,11 +32,12 @@ func handleInfra(ctx context.Context, paths config.Paths, args []string, stdout,
 		fmt.Fprintf(stdout, `Usage: %s infra <command>
 
 Commands:
-  up      Start shared Valkey, Forgejo, and PostgreSQL services via Podman Compose
-  down    Stop shared infrastructure services
-  list    Show status of running infrastructure containers
-  info    Display connection strings and web URLs for all shared infrastructure
-  doctor  Diagnose shared infrastructure storage, containers, and services, and auto-heal defects
+  up        Start shared Valkey, Forgejo, and PostgreSQL services via Podman Compose
+  down      Stop shared infrastructure services
+  list      Show status of running infrastructure containers
+  info      Display connection strings and web URLs for all shared infrastructure
+  doctor    Diagnose shared infrastructure storage, containers, and services, and auto-heal defects
+  topology  Display and generate 128k KV cache topology presets for local inference (ADR 00055)
 `, bin)
 		return 0
 
@@ -126,8 +127,95 @@ Commands:
 		fmt.Fprint(stdout, runtime.FormatInfraInfo(info))
 		return 0
 
+	case "topology":
+		return handleInfraTopology(args[1:], stdout, stderr)
+
 	default:
 		fmt.Fprintf(stderr, "%s infra: unknown command %q\n", bin, sub)
 		return 1
+	}
+}
+
+func handleInfraTopology(args []string, stdout, stderr io.Writer) int {
+	bin := binaryName()
+	if len(args) == 0 {
+		fmt.Fprint(stdout, config.FormatTopologyTable(config.GetTopologyPresets()))
+		return 0
+	}
+
+	sub := strings.ToLower(args[0])
+	switch sub {
+	case "help", "-h", "--help":
+		fmt.Fprintf(stdout, `Usage: %s infra topology [list|show <preset>|args <preset>] [--json]
+
+Commands:
+  list             Show comparison table of all available topology presets (default)
+  show <preset>    Show full configuration, memory budget, and launch command for a preset
+  args <preset>    Print only the llama-server CLI flags for the preset
+`, bin)
+		return 0
+
+	case "list":
+		if len(args) > 1 && args[1] == "--json" {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(config.GetTopologyPresets())
+			return 0
+		}
+		fmt.Fprint(stdout, config.FormatTopologyTable(config.GetTopologyPresets()))
+		return 0
+
+	case "--json":
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(config.GetTopologyPresets())
+		return 0
+
+	case "show":
+		if len(args) < 2 {
+			fmt.Fprintf(stderr, "Usage: %s infra topology show <preset> [--json]\n", bin)
+			return 1
+		}
+		preset, err := config.GetTopologyPreset(args[1])
+		if err != nil {
+			fmt.Fprintf(stderr, "%s infra topology error: %v\n", bin, err)
+			return 1
+		}
+		if len(args) > 2 && args[2] == "--json" {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(preset)
+			return 0
+		}
+		fmt.Fprint(stdout, config.FormatTopologyDetail(preset))
+		return 0
+
+	case "args":
+		if len(args) < 2 {
+			fmt.Fprintf(stderr, "Usage: %s infra topology args <preset>\n", bin)
+			return 1
+		}
+		preset, err := config.GetTopologyPreset(args[1])
+		if err != nil {
+			fmt.Fprintf(stderr, "%s infra topology error: %v\n", bin, err)
+			return 1
+		}
+		fmt.Fprintln(stdout, preset.LlamaServerArgsString())
+		return 0
+
+	default:
+		preset, err := config.GetTopologyPreset(args[0])
+		if err != nil {
+			fmt.Fprintf(stderr, "%s infra topology error: %v\n", bin, err)
+			return 1
+		}
+		if len(args) > 1 && args[1] == "--json" {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(preset)
+			return 0
+		}
+		fmt.Fprint(stdout, config.FormatTopologyDetail(preset))
+		return 0
 	}
 }
