@@ -1,23 +1,67 @@
 # Fleet — AI Agent Knowledge Base
 
-This directory provides progressive disclosure of architectural principles, engineering constraints, and operational runbooks for this repository. It is designed for optimal consumption by autonomous coding agents and doubles as agent skills with standard YAML frontmatter.
+This directory provides progressive disclosure of architectural principles, engineering constraints, specifications, and operational runbooks for this repository. It is optimized for consumption by autonomous coding agents and human contributors.
 
-## Knowledge Index & Skills
-- **[Development Workflow & PR Protocol](dev-workflow.md)** (`fleet-dev-workflow`): Branching rules, PR requirements, conventional commits, quality gates checklist.
-- **[Architecture & Runtime](architecture.md)** (`fleet-architecture`): Podman container runtime, security perimeter, layered OCI hierarchy, local LLM gateway.
-- **[OCI Image Resolution & Tagging](image-resolution.md)** (`fleet-image-resolution`): 3-tier image resolution, well-known presets, local store discovery, remote OCI refs (ADR 00029).
-- **[Testing Guidelines & Coverage Gates](testing-guidelines.md)** (`fleet-testing-guidelines`): Strict >=90% test coverage enforcement, rootless Podman cleanup patterns, containerized smoke testing.
-- **[Diagnostic Doctor & Auto-Healing](doctor-diagnostics.md)** (`fleet-doctor-diagnostics`): `fleet agent doctor` and `fleet infra doctor` architecture, check categories, healing behavior.
-- **[Code Review Protocol](code-review.md)** (`fleet-code-review`): Protocol, inspection checklist, and reporting format for architectural, logical, and security PR reviews.
-- **[Multi-Machine Local Network Federation & Gateway DNS](multi-machine-network-federation.md)** (`fleet-multi-machine-network-federation`): Architecture evaluation and operational guide for multi-machine local network Fleet pod deployment, federated backplane relaying, and gateway DNS resolution.
-- **[VS Code Extension Design](vscode-extension-design.md)** (`fleet-vscode-extension-design`): Architecture and UX design guide for Fleet VS Code extension with Remote-SSH one-click attach.
-- **[FreeBSD Host Support & Runtime Porting Guide](freebsd-host-support.md)** (`fleet-freebsd-host-support`): FreeBSD 14.x/15.x host compatibility, bhyve microVM setup, pkg package management, ZFS dataset volumes, pf.conf anchor networking, and GOOS=freebsd cross-compilation.
-- **[MCP Suite Audit Findings & Security Hardening](mcp-suite-audit-findings.md)** (`fleet-mcp-suite-audit-findings`): Adversarial security audit, input sanitization assessment, JSON-RPC 2.0 protocol compliance review, and hardening report for the MCP server suite.
-- **[Jules Collaboration & PR Review Protocol](jules-collaboration.md)** (`fleet-jules-collaboration`): Delegating audit/refactoring tasks to Jules via GitHub issues, tracking in-flight work, and conducting adversarial PR reviews.
-- **[Backplane Audit Findings](backplane-audit-findings.md)** (`fleet-backplane-audit-findings`): Targeted protocol, cryptography, and concurrency audit report and hardening fixes for backplane.
+---
+
+## Knowledge Domains & Entry Points
+
+To maintain clean separation between active engineering instructions and research or audit logs, all documentation is organized into four purpose-oriented directories, each with its own self-indexing entry point:
+
+```
+doc/ai/
+├── README.md               # Master AI Knowledge Index and Navigation Guide (This file)
+├── guidelines/README.md    # Operational, workflow, testing, and code review standards
+├── specs/README.md         # Architecture and subsystem design specifications
+├── evaluations/README.md   # Architectural spikes, model benchmarks, and hardware evaluations
+└── audits/README.md        # Security audits, protocol verifications, and findings
+```
+
+### 1. [Operational Guidelines](guidelines/README.md) (`doc/ai/guidelines/`)
+Mandatory protocols, engineering standards, and quality gates that all contributors and autonomous coding agents must follow:
+- **[Development Workflow & PR Protocol](guidelines/dev-workflow.md)** (`fleet-dev-workflow`)
+- **[Code Review Protocol & 2-Agent PR Separation](guidelines/code-review.md)** (`fleet-code-review`)
+- **[Testing Guidelines & Coverage Gates](guidelines/testing-guidelines.md)** (`fleet-testing-guidelines`)
+- **[Diagnostic Doctor & Auto-Healing](guidelines/doctor-diagnostics.md)** (`fleet-doctor-diagnostics`)
+- **[OCI Image Resolution & Tagging](guidelines/image-resolution.md)** (`fleet-image-resolution`)
+- **[Language Best Practices](guidelines/language-best-practices.md)** (`fleet-language-best-practices`)
+- **[Jules Collaboration Protocol](guidelines/jules-collaboration.md)** (`fleet-jules-collaboration`)
+
+### 2. [Architecture & Subsystem Specifications](specs/README.md) (`doc/ai/specs/`)
+Structural blueprints, runtime constraints, and subsystem designs governing the Fleet platform:
+- **[Architecture & Runtime](specs/architecture.md)** (`fleet-architecture`)
+- **[Memory Subsystem Specification](specs/memory-subsystem-spec.md)** (`fleet-memory-subsystem-spec`)
+- **[Podman Pod Co-Location Architecture](specs/podman-pod-colocation.md)** (`fleet-podman-pod-colocation`)
+- **[VS Code Extension Design](specs/vscode-extension-design.md)** (`fleet-vscode-extension-design`)
+
+### 3. [Hardware & Inference Evaluations](evaluations/README.md) (`doc/ai/evaluations/`)
+Empirical research spikes, benchmarks, and exploratory evaluations covering local inference engines, models, topologies, and networking:
+- **[128k KV Cache Scaling for Local Inference](evaluations/kv-cache-128k-scaling.md)** (`fleet-kv-cache-128k-scaling`)
+- **[Colibri MoE Inference Evaluation](evaluations/colibri-moe-inference.md)**
+- **[Distributed Inference with Exo](evaluations/distributed-inference-exo.md)**
+- **[FreeBSD Host Support & Runtime Porting Guide](evaluations/freebsd-host-support.md)**
+- **[Liquid AI LFM Model Evaluation](evaluations/liquid-ai-lfm-evaluation.md)**
+- **[Multi-Machine Local Network Federation & Gateway DNS](evaluations/multi-machine-network-federation.md)**
+- **[NVIDIA OpenShell Evaluation](evaluations/nvidia-openshell-evaluation.md)**
+- **[OpenClaw Concurrency Patterns](evaluations/openclaw-concurrency-patterns.md)**
+- **[Thinking Machines Inkling Controllable Reasoning](evaluations/thinking-machines-inkling-evaluation.md)**
+- **[Valkey Pub/Sub Evaluation](evaluations/valkey-pubsub-evaluation.md)**
+- **[Valkey Stream Guard Evaluation](evaluations/valkey-stream-guard-evaluation.md)**
+
+### 4. [Security Audits & Quality Findings](audits/README.md) (`doc/ai/audits/`)
+Adversarial security audits, vulnerability assessments, and protocol hardening records across Fleet subsystems:
+- **[Adversarial Review Findings](audits/adversarial-review.md)**
+- **[Backplane Audit Findings](audits/backplane-audit-findings.md)**
+- **[MCP Suite Audit Findings & Security Hardening](audits/mcp-suite-audit-findings.md)**
+- **[Shell and CI Audit Findings](audits/shell-and-ci-audit-findings.md)**
+
+---
 
 ## Core Directives for Autonomous Agents
-1. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.
-2. **Quality Gates are non-negotiable**: Run `make check` before proposing or submitting any code changes; statement test coverage must remain >= 90.0%.
-3. **Preserve Security Perimeter**: Agents operate in rootless Podman containers; never bypass Podman or access host secrets.
-4. **License & Copyright**: Always maintain the Boggy Creek Software LLC MIT copyright header in all source files.
+
+1. **Strict 2-Agent PR Separation**: An agent authoring or committing code for a PR **must never** review or approve its own PR. An independent `adversarial-reviewer` subagent must be spawned to audit the diff and post the review comment.
+2. **Never commit directly to `main`**: Create a descriptive feature branch and submit a PR via `gh pr create`.
+3. **Quality Gates are non-negotiable**: Run `make check` before proposing or submitting any code changes; monorepo statement test coverage must remain $\ge 90.0\%$.
+4. **Preserve Security Perimeter**: Agents operate in rootless Podman containers or confined baremetal `$HOME` perimeters; never bypass boundaries or access host secrets.
+5. **Documentation Taxonomy Integrity**: Never write evaluation spikes, benchmark dumps, or audit logs into the `doc/ai/` root or `doc/ai/guidelines/`. Always route them to their respective child directories and update the local child index.
+6. **License & Copyright**: Always maintain the Boggy Creek Software LLC MIT copyright header in all source files.

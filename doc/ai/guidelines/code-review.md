@@ -11,6 +11,21 @@ This skill defines the methodology, inspection checklist, and output format for 
 
 ---
 
+## 0. Mandatory 2-Agent PR Separation Protocol
+
+To prevent author bias and eliminate blindspots, all code reviews in this repository must strictly adhere to the **2-Agent Separation Principle**:
+
+1. **Independent Adversarial Reviewer**:
+   - The agent/subagent that authored or committed the code for a PR **must never** review or approve its own PR.
+   - An independent subagent (`adversarial-reviewer`) must be spawned with clean context, receiving only the PR diff, commit history, and this review protocol.
+   - The reviewer's explicit objective is adversarial: actively probe for security perimeter escapes, data races, socket desyncs, missing test coverage on error branches, and architectural drift.
+
+2. **Gated Merge Authorization**:
+   - Neither the PR author nor the orchestrator may squash-merge a PR until the independent adversarial reviewer has posted a formal review with an assessment of **GO**.
+   - If findings of severity **High** or **Critical** are identified, the verdict is **NO-GO**, and control returns to an implementation worker for remediation.
+
+---
+
 ## 1. Scope & Review Focus
 
 When reviewing Pull Requests, focus primarily on non-test production code (`.go`, `.sh`, `.yml`, Dockerfiles), cross-referencing against tests to ensure behavioral validity without getting bogged down by boilerplate test mechanics.
