@@ -6,13 +6,16 @@
 package tools
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -150,6 +153,23 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) (string, er
 	return output, nil
 }
 
+func parseOptionalInt(val any) (int, bool) {
+	switch v := val.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
 // ReadFileTool reads files inside the workspace.
 type ReadFileTool struct {
 	workspaceDir string
@@ -167,13 +187,21 @@ func (t *ReadFileTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Relative or workspace-scoped path of the file to read",
 			},
+			"start_line": map[string]any{
+				"type":        "integer",
+				"description": "Starting line number (1-indexed, optional)",
+			},
+			"end_line": map[string]any{
+				"type":        "integer",
+				"description": "Ending line number (1-indexed, inclusive, optional)",
+			},
 			"offset": map[string]any{
 				"type":        "integer",
-				"description": "Starting line number (1-indexed)",
+				"description": "Starting line number (1-indexed, legacy)",
 			},
 			"limit": map[string]any{
 				"type":        "integer",
-				"description": "Maximum number of lines to read",
+				"description": "Maximum number of lines to read (legacy)",
 			},
 		},
 		"required": []string{"path"},
@@ -194,6 +222,44 @@ func (t *ReadFileTool) Execute(_ context.Context, args map[string]any) (string, 
 	content, err := os.ReadFile(resolved)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+
+	startLine, hasStart := parseOptionalInt(args["start_line"])
+	endLine, hasEnd := parseOptionalInt(args["end_line"])
+
+	if (hasStart && startLine > 0) || (hasEnd && endLine > 0) {
+		if len(content) == 0 {
+			return "", fmt.Errorf("start_line (%d) exceeds file line count (0)", startLine)
+		}
+		raw := string(content)
+		raw = strings.TrimSuffix(raw, "\r\n")
+		raw = strings.TrimSuffix(raw, "\n")
+		lines := strings.Split(raw, "\n")
+
+		if !hasStart || startLine <= 0 {
+			startLine = 1
+		}
+		if !hasEnd || endLine <= 0 {
+			endLine = len(lines)
+		}
+		if startLine > endLine {
+			return "", fmt.Errorf("start_line (%d) cannot be greater than end_line (%d)", startLine, endLine)
+		}
+		if startLine > len(lines) {
+			return "", fmt.Errorf("start_line (%d) exceeds file line count (%d)", startLine, len(lines))
+		}
+		if endLine > len(lines) {
+			endLine = len(lines)
+		}
+
+		var b strings.Builder
+		for i := startLine; i <= endLine; i++ {
+			if i > startLine {
+				b.WriteByte('\n')
+			}
+			b.WriteString(fmt.Sprintf("%4d | %s", i, lines[i-1]))
+		}
+		return b.String(), nil
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -408,7 +474,177 @@ func (t *ListDirTool) Execute(_ context.Context, args map[string]any) (string, e
 	return strings.TrimRight(sb.String(), "\n"), nil
 }
 
-// RegisterBuiltinTools registers bash, read_file, write_file, edit_file, and list_dir to registry.
+// GrepSearchTool searches for a regular expression pattern across files in the workspace directory.
+type GrepSearchTool struct {
+	workspaceDir string
+}
+
+func (t *GrepSearchTool) Name() string { return "grep_search" }
+func (t *GrepSearchTool) Description() string {
+	return "Search for a regular expression pattern across files in the workspace directory"
+}
+func (t *GrepSearchTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"pattern": map[string]any{
+				"type":        "string",
+				"description": "Regular expression pattern to search for",
+			},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Relative directory or file path to search within (default: '.')",
+			},
+			"case_sensitive": map[string]any{
+				"type":        "boolean",
+				"description": "Whether the regex search is case sensitive (default: false)",
+			},
+			"max_results": map[string]any{
+				"type":        "integer",
+				"description": "Maximum number of matching lines to return (default: 100)",
+			},
+		},
+		"required": []string{"pattern"},
+	}
+}
+
+var errMaxResultsReached = errors.New("max results reached")
+
+func (t *GrepSearchTool) Execute(_ context.Context, args map[string]any) (string, error) {
+	pattern, ok := args["pattern"].(string)
+	if !ok || pattern == "" {
+		return "", errors.New("pattern argument is required and cannot be empty")
+	}
+
+	searchPath := "."
+	if p, ok := args["path"].(string); ok && strings.TrimSpace(p) != "" {
+		searchPath = strings.TrimSpace(p)
+	}
+
+	resolvedPath, err := ResolveWorkspacePath(t.workspaceDir, searchPath)
+	if err != nil {
+		return "", err
+	}
+
+	caseSensitive := false
+	if cs, ok := args["case_sensitive"].(bool); ok {
+		caseSensitive = cs
+	}
+
+	maxResults := 100
+	if mr, ok := parseOptionalInt(args["max_results"]); ok && mr > 0 {
+		maxResults = mr
+	}
+
+	regexPattern := pattern
+	if !caseSensitive {
+		regexPattern = "(?i)" + regexPattern
+	}
+	re, err := regexp.Compile(regexPattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid regular expression: %w", err)
+	}
+
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat path %s: %w", searchPath, err)
+	}
+
+	var results []string
+
+	if !info.IsDir() {
+		rel, err := filepath.Rel(t.workspaceDir, resolvedPath)
+		if err != nil {
+			rel = resolvedPath
+		}
+		_ = searchFile(resolvedPath, rel, re, maxResults, &results)
+		return strings.Join(results, "\n"), nil
+	}
+
+	err = filepath.WalkDir(resolvedPath, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if (strings.HasPrefix(name, ".") && p != resolvedPath) || name == "vendor" || name == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(t.workspaceDir, p)
+		if err != nil {
+			rel = p
+		}
+		if err := searchFile(p, rel, re, maxResults, &results); err != nil {
+			if errors.Is(err, errMaxResultsReached) {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errMaxResultsReached) {
+		return "", err
+	}
+
+	return strings.Join(results, "\n"), nil
+}
+
+func isBinaryFile(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil
+	}
+	return bytes.IndexByte(buf[:n], 0) != -1, nil
+}
+
+func searchFile(filePath, relPath string, re *regexp.Regexp, maxResults int, currentResults *[]string) error {
+	isBin, err := isBinaryFile(filePath)
+	if err != nil || isBin {
+		return nil
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	reader := bufio.NewReader(f)
+	lineNum := 1
+	for {
+		if len(*currentResults) >= maxResults {
+			return errMaxResultsReached
+		}
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			cleanLine := strings.TrimRight(line, "\r\n")
+			if re.MatchString(cleanLine) {
+				*currentResults = append(*currentResults, fmt.Sprintf("%s:%d: %s", relPath, lineNum, cleanLine))
+			}
+			lineNum++
+		}
+		if err != nil {
+			break
+		}
+	}
+	return nil
+}
+
+// RegisterBuiltinTools registers bash, read_file, write_file, edit_file, list_dir, and grep_search to registry.
 func RegisterBuiltinTools(r *Registry, workspaceDir string) error {
 	if r == nil {
 		return errors.New("registry cannot be nil")
@@ -419,6 +655,7 @@ func RegisterBuiltinTools(r *Registry, workspaceDir string) error {
 		&WriteFileTool{workspaceDir: workspaceDir},
 		&EditFileTool{workspaceDir: workspaceDir},
 		&ListDirTool{workspaceDir: workspaceDir},
+		&GrepSearchTool{workspaceDir: workspaceDir},
 	}
 	for _, tool := range tools {
 		if err := r.Register(tool); err != nil {
