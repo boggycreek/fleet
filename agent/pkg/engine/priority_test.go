@@ -178,6 +178,28 @@ func TestBeadsTaskResolver_LogPrefixesWithBrackets(t *testing.T) {
 	}
 }
 
+func TestBeadsTaskResolver_MalformedPrefixBracketsBeforeValidArray(t *testing.T) {
+	// Tests that candidate slice reuse does not corrupt items
+	outputWithMalformedFirstBracket := `[not-valid-json]
+[also [broken]
+[
+	{"id": "sndbx-multi", "status": "in_progress", "priority": 0}
+]`
+
+	resolver := NewBeadsTaskResolver("")
+	resolver.SetCommandRunner(func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+		return []byte(outputWithMalformedFirstBracket), nil
+	})
+
+	prio, found, err := resolver.GetActiveTaskPriority(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found || prio != 0 {
+		t.Errorf("expected found=true, prio=0; got found=%v, prio=%d", found, prio)
+	}
+}
+
 func TestBeadsTaskResolver_NoActiveTask(t *testing.T) {
 	jsonOutput := `[
 		{"id": "sndbx-1", "status": "closed", "priority": 1},

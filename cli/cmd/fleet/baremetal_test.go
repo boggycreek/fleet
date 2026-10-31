@@ -416,6 +416,14 @@ func TestBaremetalAgentCreateWithActiveEnrollment(t *testing.T) {
 		t.Errorf("expected CONTROLLER_SSH_PUB_KEY in secrets payload: %s", string(secretsBody))
 	}
 
+	// Signal node setup completion via /api/v1/complete
+	completeURL := fmt.Sprintf("%s/api/v1/complete/live-enroll-node", enrollBase)
+	respComp, err := client.Post(completeURL, "text/plain", nil)
+	if err != nil {
+		t.Fatalf("failed signaling completion: %v", err)
+	}
+	_ = respComp.Body.Close()
+
 	// Wait for create to finish
 	select {
 	case code := <-createDone:

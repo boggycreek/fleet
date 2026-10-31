@@ -109,13 +109,15 @@ type EnrollmentServer struct {
 	addr       string
 	port       int
 
-	mu          sync.Mutex
-	tokenBurned bool
-	collected   chan struct{}
-	stopped     chan struct{}
-	collectOnce sync.Once
-	stopOnce    sync.Once
-	timer       *time.Timer
+	mu           sync.Mutex
+	tokenBurned  bool
+	collected    chan struct{}
+	stopped      chan struct{}
+	completed    chan struct{}
+	collectOnce  sync.Once
+	stopOnce     sync.Once
+	completeOnce sync.Once
+	timer        *time.Timer
 }
 
 // GenerateEnrollmentToken creates a cryptographically secure random one-time enrollment token.
@@ -228,6 +230,7 @@ func NewEnrollmentServer(cfg EnrollmentConfig) (*EnrollmentServer, error) {
 		listener:      cfg.Listener,
 		collected:     make(chan struct{}),
 		stopped:       make(chan struct{}),
+		completed:     make(chan struct{}),
 	}
 
 	if srv.installScript == "" {
@@ -237,6 +240,7 @@ func NewEnrollmentServer(cfg EnrollmentConfig) (*EnrollmentServer, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/install/", srv.handleInstall)
 	mux.HandleFunc("/api/v1/enroll/", srv.handleEnroll)
+	mux.HandleFunc("/api/v1/complete/", srv.handleComplete)
 	mux.HandleFunc("/bin/", srv.handleBinary)
 
 	srv.httpServer = &http.Server{
@@ -350,6 +354,44 @@ func (s *EnrollmentServer) Wait(ctx context.Context) error {
 			return nil
 		}
 		return fmt.Errorf("enrollment timed out before credentials were collected")
+	}
+}
+
+// Completed returns true if the agent node has signaled setup completion.
+func (s *EnrollmentServer) Completed() bool {
+	select {
+	case <-s.completed:
+		return true
+	default:
+		return false
+	}
+}
+
+// WaitForCompletion blocks until the agent signals completion via /api/v1/complete,
+// the context is cancelled, the server stops, or a 60-second grace period elapses.
+func (s *EnrollmentServer) WaitForCompletion(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	timer := time.NewTimer(60 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case <-s.completed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.stopped:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return nil
+	case <-timer.C:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return nil
 	}
 }
 
@@ -475,6 +517,28 @@ func (s *EnrollmentServer) handleEnroll(w http.ResponseWriter, r *http.Request) 
 	s.mu.Unlock()
 }
 
+func (s *EnrollmentServer) handleComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	reqAgent := strings.TrimPrefix(r.URL.Path, "/api/v1/complete/")
+	reqAgent = strings.Trim(reqAgent, "/")
+	if !strings.EqualFold(reqAgent, s.agentName) {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+
+	s.completeOnce.Do(func() {
+		close(s.completed)
+	})
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "OK\n")
+}
+
 func (s *EnrollmentServer) handleBinary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -573,11 +637,11 @@ if [[ "${EUID}" -eq 0 ]]; then
     fi
     chmod 0755 "${TMP_SCRIPT}"
     chown -h "${TARGET_USER}:${TARGET_USER}" "${TMP_SCRIPT}"
-    # shellcheck disable=SC2016,SC2097,SC2098
-    ENROLL_SERVER="${ENROLL_SERVER}" ENROLL_TOKEN="${ENROLL_TOKEN}" AGENT_NAME="${AGENT_NAME}" \
-    su - "${TARGET_USER}" -s /bin/bash -- -c \
-      'ENROLL_SERVER="$1" ENROLL_TOKEN="$2" AGENT_NAME="$3" "$4"' \
-      -- "${ENROLL_SERVER}" "${ENROLL_TOKEN}" "${AGENT_NAME}" "${TMP_SCRIPT}"
+    # shellcheck disable=SC2016
+    printf '%s\n%s\n%s\n' "${ENROLL_SERVER}" "${ENROLL_TOKEN}" "${AGENT_NAME}" | \
+      su - "${TARGET_USER}" -s /bin/bash -- -c \
+        'read -r ENROLL_SERVER; read -r ENROLL_TOKEN; read -r AGENT_NAME; export ENROLL_SERVER ENROLL_TOKEN AGENT_NAME; "$1"' \
+        -- "${TMP_SCRIPT}"
     rm -f "${TMP_SCRIPT}"
     exit 0
 fi
@@ -649,5 +713,6 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl --user enable --now fleet-agent.service
     echo "==> fleet-agent.service enabled and started!"
 fi
+curl -sSf -X POST "${ENROLL_SERVER}/api/v1/complete/${AGENT_NAME}" >/dev/null 2>&1 || curl -sSf "${ENROLL_SERVER}/api/v1/complete/${AGENT_NAME}" >/dev/null 2>&1 || true
 `
 }

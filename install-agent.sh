@@ -118,11 +118,11 @@ if [[ "${EUID}" -eq 0 ]]; then
     chown -h "${TARGET_USER}:${TARGET_USER}" "${TMP_SCRIPT}"
 
     echo "==> Dropping privileges to '${TARGET_USER}' to complete userspace setup..."
-    # shellcheck disable=SC2016,SC2097,SC2098
-    ENROLL_SERVER="${ENROLL_SERVER}" ENROLL_TOKEN="${ENROLL_TOKEN}" AGENT_NAME="${AGENT_NAME}" \
-    su - "${TARGET_USER}" -s /bin/bash -- -c \
-      'ENROLL_SERVER="$1" ENROLL_TOKEN="$2" AGENT_NAME="$3" "$4"' \
-      -- "${ENROLL_SERVER}" "${ENROLL_TOKEN}" "${AGENT_NAME}" "${TMP_SCRIPT}"
+    # shellcheck disable=SC2016
+    printf '%s\n%s\n%s\n' "${ENROLL_SERVER}" "${ENROLL_TOKEN}" "${AGENT_NAME}" | \
+      su - "${TARGET_USER}" -s /bin/bash -- -c \
+        'read -r ENROLL_SERVER; read -r ENROLL_TOKEN; read -r AGENT_NAME; export ENROLL_SERVER ENROLL_TOKEN AGENT_NAME; "$1"' \
+        -- "${TMP_SCRIPT}"
     rm -f "${TMP_SCRIPT}"
     exit 0
 fi
@@ -285,6 +285,9 @@ if command -v systemctl >/dev/null 2>&1; then
 else
     echo "Notice: systemctl not found. Service installed at ${SERVICE_FILE}."
 fi
+
+# 6. Notify enrollment server that installation and setup are complete
+curl -sSf -X POST "${ENROLL_SERVER}/api/v1/complete/${AGENT_NAME}" >/dev/null 2>&1 || curl -sSf "${ENROLL_SERVER}/api/v1/complete/${AGENT_NAME}" >/dev/null 2>&1 || true
 
 cat <<EOF
 

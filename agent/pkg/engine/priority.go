@@ -117,7 +117,9 @@ func (b *BeadsTaskResolver) GetActiveTaskPriority(ctx context.Context) (int, boo
 			if out[i] == '[' {
 				for j := len(out) - 1; j > i; j-- {
 					if out[j] == ']' {
-						if err2 := json.Unmarshal(out[i:j+1], &items); err2 == nil {
+						var candidate []beadsTaskItem
+						if err2 := json.Unmarshal(out[i:j+1], &candidate); err2 == nil {
+							items = candidate
 							parsed = true
 							break
 						}

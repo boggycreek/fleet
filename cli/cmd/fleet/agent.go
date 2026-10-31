@@ -616,6 +616,8 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 		}
 
 		fmt.Fprintf(stdout, "[✓] Credentials collected and token burned successfully!\n")
+		_ = enrollServer.WaitForCompletion(ctx)
+		_ = enrollServer.Shutdown(context.Background())
 		fmt.Fprintf(stdout, "Agent %q is now ready.\n", cfg.Name)
 		fmt.Fprintf(stdout, "  SSH:   %s agent ssh %s\n", bin, cfg.Name)
 		fmt.Fprintf(stdout, "  IDE:   %s agent open %s in vscode\n", bin, cfg.Name)
