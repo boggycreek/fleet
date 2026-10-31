@@ -38,6 +38,7 @@ type REPLEngine struct {
 	llm                *LLMClient
 	registry           *tools.Registry
 	responder          TurnResponder
+	priorityResolver   TaskPriorityResolver
 	agentID            string
 	humanName          string
 	workspaceDir       string
@@ -56,6 +57,7 @@ func NewREPLEngine(llm *LLMClient, registry *tools.Registry, workspaceDir, role 
 	return &REPLEngine{
 		llm:               llm,
 		registry:          registry,
+		priorityResolver:  NewBeadsTaskResolver(workspaceDir),
 		workspaceDir:      workspaceDir,
 		role:              role,
 		pollInterval:      DefaultPollInterval,
@@ -64,6 +66,26 @@ func NewREPLEngine(llm *LLMClient, registry *tools.Registry, workspaceDir, role 
 		history:           make([]ChatMessage, 0),
 		inboundQueue:      make([]runtime.Event, 0),
 	}
+}
+
+// SetPriorityResolver configures the task priority resolver for dynamic reasoning budget.
+func (e *REPLEngine) SetPriorityResolver(r TaskPriorityResolver) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.priorityResolver = r
+}
+
+// PriorityResolver returns the configured TaskPriorityResolver.
+func (e *REPLEngine) PriorityResolver() TaskPriorityResolver {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.priorityResolver
+}
+
+func (e *REPLEngine) getPriorityResolver() TaskPriorityResolver {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.priorityResolver
 }
 
 // SetResponder sets the TurnResponder for delivering conversational replies back to the sender.
@@ -442,6 +464,15 @@ func (e *REPLEngine) executeTurn(ctx context.Context, bus *runtime.EventBus, sta
 			Model:    e.llm.Model(),
 			Messages: msgs,
 			Tools:    openAITools,
+		}
+
+		if resolver := e.getPriorityResolver(); resolver != nil {
+			if prio, found, err := resolver.GetActiveTaskPriority(ctx); err == nil && found {
+				budget, effort := MapPriorityToReasoning(prio)
+				req.ReasoningBudget = &budget
+				req.ReasoningEffort = effort
+				fmt.Printf("[repl] Active task priority P%d -> reasoning_budget=%.2f, reasoning_effort=%s\n", prio, budget, effort)
+			}
 		}
 
 		resp, err := e.llm.ChatCompletion(ctx, req)
