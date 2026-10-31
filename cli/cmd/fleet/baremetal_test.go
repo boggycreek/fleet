@@ -99,6 +99,7 @@ func TestBaremetalAgentCreateAndLifecycle(t *testing.T) {
 	}
 	_ = paths.EnsureDirectories()
 	_ = os.WriteFile(paths.IDEKeyFile, []byte("mock-key"), 0600)
+	_ = os.WriteFile(paths.IDEKeyFile+".pub", []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test-key controller@fleet\n"), 0644)
 
 	t.Setenv("FORGEJO_DISABLED", "1")
 	t.Setenv("SONAR_DISABLED", "1")
@@ -330,6 +331,7 @@ func TestBaremetalAgentCreateWithActiveEnrollment(t *testing.T) {
 	}
 	_ = paths.EnsureDirectories()
 	_ = os.WriteFile(paths.IDEKeyFile, []byte("mock-key"), 0600)
+	_ = os.WriteFile(paths.IDEKeyFile+".pub", []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test-key controller@fleet\n"), 0644)
 
 	t.Setenv("FORGEJO_DISABLED", "1")
 	t.Setenv("SONAR_DISABLED", "1")
@@ -410,6 +412,17 @@ func TestBaremetalAgentCreateWithActiveEnrollment(t *testing.T) {
 	if !strings.Contains(string(secretsBody), `AGENT_NAME="live-enroll-node"`) {
 		t.Errorf("expected AGENT_NAME in secrets payload: %s", string(secretsBody))
 	}
+	if !strings.Contains(string(secretsBody), `CONTROLLER_SSH_PUB_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test-key controller@fleet"`) {
+		t.Errorf("expected CONTROLLER_SSH_PUB_KEY in secrets payload: %s", string(secretsBody))
+	}
+
+	// Signal node setup completion via /api/v1/complete
+	completeURL := fmt.Sprintf("%s/api/v1/complete/live-enroll-node", enrollBase)
+	respComp, err := client.Post(completeURL, "text/plain", nil)
+	if err != nil {
+		t.Fatalf("failed signaling completion: %v", err)
+	}
+	_ = respComp.Body.Close()
 
 	// Wait for create to finish
 	select {
@@ -439,6 +452,7 @@ func TestBaremetalAgentCreateCancelledAndDefaults(t *testing.T) {
 	}
 	_ = paths.EnsureDirectories()
 	_ = os.WriteFile(paths.IDEKeyFile, []byte("mock-key"), 0600)
+	_ = os.WriteFile(paths.IDEKeyFile+".pub", []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test-key controller@fleet\n"), 0644)
 
 	t.Setenv("FORGEJO_DISABLED", "1")
 	t.Setenv("SONAR_DISABLED", "1")

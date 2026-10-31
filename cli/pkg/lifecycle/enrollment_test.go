@@ -46,8 +46,9 @@ func TestEnrollmentSecretsFormatEnv(t *testing.T) {
 		ValkeyPassword:     "secretpass123",
 		ForgejoURL:         "http://192.168.1.100:3000",
 		OpenAIBaseURL:      "http://192.168.1.100:8080/v1",
-		OpenAIModel:        "qwen2.5-coder",
-		OpenAIAPIKey:       "sk-local",
+		OpenAIModel:            "qwen2.5-coder",
+		OpenAIAPIKey:           "sk-local",
+		ControllerSSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI controller@fleet",
 	}
 
 	envStr := sec.FormatEnv()
@@ -71,6 +72,12 @@ func TestEnrollmentSecretsFormatEnv(t *testing.T) {
 	}
 	if !strings.Contains(envStr, `BP_SIGNING_KEY_PEM=`) {
 		t.Errorf("expected BP_SIGNING_KEY_PEM in envStr: %s", envStr)
+	}
+	if !strings.Contains(envStr, `BP_SIGNING_KEY_B64=`) {
+		t.Errorf("expected BP_SIGNING_KEY_B64 in envStr: %s", envStr)
+	}
+	if !strings.Contains(envStr, `CONTROLLER_SSH_PUB_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI controller@fleet"`) {
+		t.Errorf("expected CONTROLLER_SSH_PUB_KEY in envStr: %s", envStr)
 	}
 }
 
@@ -197,6 +204,65 @@ func TestEnrollmentServerLifecycleAndEndpoints(t *testing.T) {
 		t.Errorf("expected token to be marked burned")
 	}
 
+	// Verify Completed() is initially false
+	if srv.Completed() {
+		t.Errorf("expected Completed() to be false before complete endpoint called")
+	}
+
+	// 5a. Complete endpoint for wrong agent -> 404
+	respWrongComplete, err := client.Post(srv.URL("127.0.0.1")+"/api/v1/complete/wrong-node", "text/plain", nil)
+	if err != nil {
+		t.Fatalf("failed POST wrong complete: %v", err)
+	}
+	_ = respWrongComplete.Body.Close()
+	if respWrongComplete.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for wrong agent complete, got %d", respWrongComplete.StatusCode)
+	}
+
+	// 5b. Complete endpoint with disallowed method -> 405
+	reqDelete, _ := http.NewRequest(http.MethodDelete, srv.URL("127.0.0.1")+"/api/v1/complete/test-baremetal", nil)
+	respMethodNotAllowed, err := client.Do(reqDelete)
+	if err != nil {
+		t.Fatalf("failed DELETE complete: %v", err)
+	}
+	_ = respMethodNotAllowed.Body.Close()
+	if respMethodNotAllowed.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for DELETE complete, got %d", respMethodNotAllowed.StatusCode)
+	}
+
+	// 5c. Valid complete call via POST
+	respComplete, err := client.Post(srv.URL("127.0.0.1")+"/api/v1/complete/test-baremetal", "text/plain", nil)
+	if err != nil {
+		t.Fatalf("failed POST complete: %v", err)
+	}
+	completeBody, _ := io.ReadAll(respComplete.Body)
+	_ = respComplete.Body.Close()
+	if respComplete.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 OK for complete endpoint, got %d", respComplete.StatusCode)
+	}
+	if !strings.Contains(string(completeBody), "OK") {
+		t.Errorf("expected OK in complete response, got %s", string(completeBody))
+	}
+
+	// 5d. Valid complete call via GET
+	respCompleteGet, err := client.Get(srv.URL("127.0.0.1") + "/api/v1/complete/test-baremetal")
+	if err != nil {
+		t.Fatalf("failed GET complete: %v", err)
+	}
+	_ = respCompleteGet.Body.Close()
+	if respCompleteGet.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 OK for GET complete, got %d", respCompleteGet.StatusCode)
+	}
+
+	if !srv.Completed() {
+		t.Errorf("expected Completed() to be true after complete endpoint call")
+	}
+
+	// 5e. Verify WaitForCompletion returns nil cleanly
+	if err := srv.WaitForCompletion(ctx); err != nil {
+		t.Errorf("expected WaitForCompletion() to return nil, got %v", err)
+	}
+
 	// 6. Token burned -> subsequent request returns 410 Gone (or connection closed)
 	// (Server may already be shut down or return 410)
 	respBurned, err := client.Get(validURL)
@@ -321,6 +387,30 @@ func TestEnrollmentServerBinaryServing(t *testing.T) {
 			t.Errorf("expected 400 for invalid binary name, got %d", respInvalid.StatusCode)
 		}
 	}
+
+	// 4. Burn token via enrollment, verify binary still downloads successfully (grace period)
+	enrollResp, err := client.Get(srv.URL("127.0.0.1") + "/api/v1/enroll/bin-agent?token=tok")
+	if err != nil {
+		t.Fatalf("failed enroll: %v", err)
+	}
+	_ = enrollResp.Body.Close()
+	if enrollResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 enroll, got %d", enrollResp.StatusCode)
+	}
+	if !srv.TokenBurned() {
+		t.Errorf("expected token to be burned")
+	}
+
+	// Verify binary download still succeeds after token is burned
+	respAfterBurn, err := client.Get(srv.URL("127.0.0.1") + "/bin/fleet-agent")
+	if err != nil {
+		t.Fatalf("failed fetching fleet-agent after token burned: %v", err)
+	}
+	dataAfter, _ := io.ReadAll(respAfterBurn.Body)
+	_ = respAfterBurn.Body.Close()
+	if respAfterBurn.StatusCode != http.StatusOK || !strings.Contains(string(dataAfter), "echo agent") {
+		t.Errorf("expected 200 OK for binary after token burned, got %d", respAfterBurn.StatusCode)
+	}
 }
 
 func TestEnrollmentServerTTLAndTimeout(t *testing.T) {
@@ -376,6 +466,11 @@ func TestEnrollmentServerContextCancel(t *testing.T) {
 	err = srv.Wait(ctx)
 	if err != context.Canceled {
 		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+
+	errComplete := srv.WaitForCompletion(ctx)
+	if errComplete != context.Canceled {
+		t.Errorf("expected context.Canceled from WaitForCompletion, got: %v", errComplete)
 	}
 }
 
@@ -513,5 +608,11 @@ func TestLoadDefaultInstallScript(t *testing.T) {
 	script := loadDefaultInstallScript()
 	if !strings.Contains(script, "fleet-agent") || !strings.Contains(script, "__FLEET_ENROLL_TOKEN__") {
 		t.Errorf("unexpected install script content: %s", script)
+	}
+	if !strings.Contains(script, "read -r ENROLL_TOKEN") {
+		t.Errorf("expected script to read ENROLL_TOKEN from stdin")
+	}
+	if !strings.Contains(script, "/api/v1/complete/") {
+		t.Errorf("expected script to notify /api/v1/complete/ endpoint")
 	}
 }

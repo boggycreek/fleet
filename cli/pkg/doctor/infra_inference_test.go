@@ -327,4 +327,22 @@ func TestCheckLocalInferenceSlots_Scenarios(t *testing.T) {
 			t.Errorf("expected 3 default candidate URLs, got %d", len(candidates))
 		}
 	})
+
+	// 11. Multi-candidate endpoint probing fallback on non-200
+	t.Run("Multi-candidate fallback on non-200", func(t *testing.T) {
+		t.Setenv("LLM_GATEWAY_URL", srvErrHealth.URL+","+srvA.URL)
+		rep := &DoctorReport{AgentName: "shared-infra"}
+		checkLocalInferenceSlots(ctx, rep)
+
+		if len(rep.Checks) != 1 {
+			t.Fatalf("expected 1 check, got %d", len(rep.Checks))
+		}
+		c := rep.Checks[0]
+		if c.Status != StatusOK {
+			t.Errorf("expected StatusOK from healthy second candidate, got %s: %s", c.Status, c.Message)
+		}
+		if rep.WarningCount != 0 {
+			t.Errorf("expected 0 warnings, got %d", rep.WarningCount)
+		}
+	})
 }
