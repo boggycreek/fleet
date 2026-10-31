@@ -8,6 +8,8 @@ package lifecycle
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,16 +33,17 @@ const DefaultEnrollmentTTL = 15 * time.Minute
 
 // EnrollmentSecrets contains the sensitive environment and credentials delivered to the baremetal agent.
 type EnrollmentSecrets struct {
-	AgentName          string `json:"agent_name"`
-	AgentRole          string `json:"agent_role"`
-	AgentSigningKeyPEM string `json:"agent_signing_key_pem"`
-	ValkeyHost         string `json:"valkey_host"`
-	ValkeyPort         int    `json:"valkey_port"`
-	ValkeyPassword     string `json:"valkey_password"`
-	ForgejoURL         string `json:"forgejo_url"`
-	OpenAIBaseURL      string `json:"openai_base_url"`
-	OpenAIModel        string `json:"openai_model,omitempty"`
-	OpenAIAPIKey       string `json:"openai_api_key,omitempty"`
+	AgentName              string `json:"agent_name"`
+	AgentRole              string `json:"agent_role"`
+	AgentSigningKeyPEM     string `json:"agent_signing_key_pem"`
+	ValkeyHost             string `json:"valkey_host"`
+	ValkeyPort             int    `json:"valkey_port"`
+	ValkeyPassword         string `json:"valkey_password"`
+	ForgejoURL             string `json:"forgejo_url"`
+	OpenAIBaseURL          string `json:"openai_base_url"`
+	OpenAIModel            string `json:"openai_model,omitempty"`
+	OpenAIAPIKey           string `json:"openai_api_key,omitempty"`
+	ControllerSSHPublicKey string `json:"controller_ssh_pub_key,omitempty"`
 }
 
 // FormatEnv formats the secrets payload as a dotenv string for agent.env.
@@ -66,8 +69,13 @@ func (s EnrollmentSecrets) FormatEnv() string {
 	if s.OpenAIAPIKey != "" {
 		buf.WriteString(fmt.Sprintf("OPENAI_API_KEY=%q\n", s.OpenAIAPIKey))
 	}
+	if s.ControllerSSHPublicKey != "" {
+		buf.WriteString(fmt.Sprintf("CONTROLLER_SSH_PUB_KEY=%q\n", s.ControllerSSHPublicKey))
+	}
 	if s.AgentSigningKeyPEM != "" {
 		buf.WriteString(fmt.Sprintf("BP_SIGNING_KEY_PEM=%q\n", s.AgentSigningKeyPEM))
+		b64Key := base64.StdEncoding.EncodeToString([]byte(s.AgentSigningKeyPEM))
+		buf.WriteString(fmt.Sprintf("BP_SIGNING_KEY_B64=%q\n", b64Key))
 	}
 	return buf.String()
 }
@@ -101,13 +109,15 @@ type EnrollmentServer struct {
 	addr       string
 	port       int
 
-	mu          sync.Mutex
-	tokenBurned bool
-	collected   chan struct{}
-	stopped     chan struct{}
-	collectOnce sync.Once
-	stopOnce    sync.Once
-	timer       *time.Timer
+	mu           sync.Mutex
+	tokenBurned  bool
+	collected    chan struct{}
+	stopped      chan struct{}
+	completed    chan struct{}
+	collectOnce  sync.Once
+	stopOnce     sync.Once
+	completeOnce sync.Once
+	timer        *time.Timer
 }
 
 // GenerateEnrollmentToken creates a cryptographically secure random one-time enrollment token.
@@ -220,6 +230,7 @@ func NewEnrollmentServer(cfg EnrollmentConfig) (*EnrollmentServer, error) {
 		listener:      cfg.Listener,
 		collected:     make(chan struct{}),
 		stopped:       make(chan struct{}),
+		completed:     make(chan struct{}),
 	}
 
 	if srv.installScript == "" {
@@ -229,6 +240,7 @@ func NewEnrollmentServer(cfg EnrollmentConfig) (*EnrollmentServer, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/install/", srv.handleInstall)
 	mux.HandleFunc("/api/v1/enroll/", srv.handleEnroll)
+	mux.HandleFunc("/api/v1/complete/", srv.handleComplete)
 	mux.HandleFunc("/bin/", srv.handleBinary)
 
 	srv.httpServer = &http.Server{
@@ -330,12 +342,6 @@ func (s *EnrollmentServer) InstallCommand(host string) string {
 func (s *EnrollmentServer) Wait(ctx context.Context) error {
 	select {
 	case <-s.collected:
-		// Wait for clean server shutdown
-		select {
-		case <-s.stopped:
-		case <-time.After(2 * time.Second):
-			_ = s.Shutdown(context.Background())
-		}
 		return nil
 	case <-ctx.Done():
 		_ = s.Shutdown(context.Background())
@@ -348,6 +354,44 @@ func (s *EnrollmentServer) Wait(ctx context.Context) error {
 			return nil
 		}
 		return fmt.Errorf("enrollment timed out before credentials were collected")
+	}
+}
+
+// Completed returns true if the agent node has signaled setup completion.
+func (s *EnrollmentServer) Completed() bool {
+	select {
+	case <-s.completed:
+		return true
+	default:
+		return false
+	}
+}
+
+// WaitForCompletion blocks until the agent signals completion via /api/v1/complete,
+// the context is cancelled, the server stops, or a 60-second grace period elapses.
+func (s *EnrollmentServer) WaitForCompletion(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	timer := time.NewTimer(60 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case <-s.completed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.stopped:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return nil
+	case <-timer.C:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return nil
 	}
 }
 
@@ -415,7 +459,7 @@ func (s *EnrollmentServer) handleEnroll(w http.ResponseWriter, r *http.Request) 
 	}
 
 	token := r.URL.Query().Get("token")
-	if token == "" || token != s.token {
+	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.token)) != 1 {
 		http.Error(w, "Unauthorized: invalid or missing enrollment token", http.StatusUnauthorized)
 		return
 	}
@@ -457,14 +501,42 @@ func (s *EnrollmentServer) handleEnroll(w http.ResponseWriter, r *http.Request) 
 		flusher.Flush()
 	}
 
-	// Trigger collection notification and graceful shutdown
+	// Trigger collection notification
 	s.collectOnce.Do(func() {
 		close(s.collected)
 	})
 
-	time.AfterFunc(150*time.Millisecond, func() {
+	// Keep server running with a 5-minute grace period before shutdown so binary downloads complete
+	s.mu.Lock()
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+	s.timer = time.AfterFunc(5*time.Minute, func() {
 		_ = s.Shutdown(context.Background())
 	})
+	s.mu.Unlock()
+}
+
+func (s *EnrollmentServer) handleComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	reqAgent := strings.TrimPrefix(r.URL.Path, "/api/v1/complete/")
+	reqAgent = strings.Trim(reqAgent, "/")
+	if !strings.EqualFold(reqAgent, s.agentName) {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+
+	s.completeOnce.Do(func() {
+		close(s.completed)
+	})
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "OK\n")
 }
 
 func (s *EnrollmentServer) handleBinary(w http.ResponseWriter, r *http.Request) {
@@ -557,11 +629,19 @@ if [[ "${EUID}" -eq 0 ]]; then
     if command -v loginctl >/dev/null 2>&1; then
         loginctl enable-linger "${TARGET_USER}" || true
     fi
-    TMP_SCRIPT="/tmp/fleet-install-$$.sh"
-    curl -sSf "${ENROLL_SERVER}/install/${AGENT_NAME}?token=${ENROLL_TOKEN}" -o "${TMP_SCRIPT}"
+    TMP_SCRIPT=$(mktemp "${USER_HOME}/.fleet-install-XXXXXX.sh" 2>/dev/null || mktemp /tmp/fleet-install-XXXXXX.sh)
+    if [[ -f "$0" ]]; then
+        cp "$0" "${TMP_SCRIPT}"
+    else
+        curl -sSf "${ENROLL_SERVER}/install/${AGENT_NAME}?token=${ENROLL_TOKEN}" -o "${TMP_SCRIPT}"
+    fi
     chmod 0755 "${TMP_SCRIPT}"
-    chown "${TARGET_USER}:${TARGET_USER}" "${TMP_SCRIPT}"
-    su - "${TARGET_USER}" -c "${TMP_SCRIPT} --server '${ENROLL_SERVER}' --token '${ENROLL_TOKEN}' --name '${AGENT_NAME}'"
+    chown -h "${TARGET_USER}:${TARGET_USER}" "${TMP_SCRIPT}"
+    # shellcheck disable=SC2016
+    printf '%s\n%s\n%s\n' "${ENROLL_SERVER}" "${ENROLL_TOKEN}" "${AGENT_NAME}" | \
+      su - "${TARGET_USER}" -s /bin/bash -- -c \
+        'read -r ENROLL_SERVER; read -r ENROLL_TOKEN; read -r AGENT_NAME; export ENROLL_SERVER ENROLL_TOKEN AGENT_NAME; "$1"' \
+        -- "${TMP_SCRIPT}"
     rm -f "${TMP_SCRIPT}"
     exit 0
 fi
@@ -576,11 +656,31 @@ ENV_FILE="${CONFIG_DIR}/agent.env"
 echo "==> Collecting secrets from ${ENROLL_SERVER}..."
 curl -sSf "${ENROLL_SERVER}/api/v1/enroll/${AGENT_NAME}?token=${ENROLL_TOKEN}" -o "${ENV_FILE}"
 chmod 0600 "${ENV_FILE}"
+if grep -q "^CONTROLLER_SSH_PUB_KEY=" "${ENV_FILE}"; then
+    CONTROLLER_PUB_KEY=$(grep "^CONTROLLER_SSH_PUB_KEY=" "${ENV_FILE}" | cut -d'"' -f2)
+    if [[ -n "${CONTROLLER_PUB_KEY}" ]]; then
+        mkdir -p "${HOME}/.ssh"
+        chmod 0700 "${HOME}/.ssh"
+        touch "${HOME}/.ssh/authorized_keys"
+        chmod 0600 "${HOME}/.ssh/authorized_keys"
+        if ! grep -qF "${CONTROLLER_PUB_KEY}" "${HOME}/.ssh/authorized_keys" 2>/dev/null; then
+            echo "${CONTROLLER_PUB_KEY}" >> "${HOME}/.ssh/authorized_keys"
+        fi
+    fi
+fi
 KEY_FILE="${CONFIG_DIR}/signing-key.pem"
-if grep -q "BP_SIGNING_KEY_PEM=" "${ENV_FILE}"; then
+if grep -q "^BP_SIGNING_KEY_B64=" "${ENV_FILE}"; then
+    grep "^BP_SIGNING_KEY_B64=" "${ENV_FILE}" | cut -d'"' -f2 | base64 -d > "${KEY_FILE}"
+    chmod 0600 "${KEY_FILE}"
+    if ! grep -q "^BP_SIGNING_KEY=" "${ENV_FILE}"; then
+        echo "BP_SIGNING_KEY=${KEY_FILE}" >> "${ENV_FILE}"
+    fi
+elif grep -q "BP_SIGNING_KEY_PEM=" "${ENV_FILE}"; then
     sed -n '/BP_SIGNING_KEY_PEM="/,/^"/p' "${ENV_FILE}" | sed 's/BP_SIGNING_KEY_PEM="//' | sed 's/"$//' > "${KEY_FILE}"
     chmod 0600 "${KEY_FILE}"
-    echo "BP_SIGNING_KEY=${KEY_FILE}" >> "${ENV_FILE}"
+    if ! grep -q "^BP_SIGNING_KEY=" "${ENV_FILE}"; then
+        echo "BP_SIGNING_KEY=${KEY_FILE}" >> "${ENV_FILE}"
+    fi
 fi
 echo "WORKSPACE_DIR=${WORKSPACE_DIR}" >> "${ENV_FILE}"
 for bin in fleet-agent bp; do
@@ -607,9 +707,12 @@ StandardError=journal
 WantedBy=default.target
 EOF
 if command -v systemctl >/dev/null 2>&1; then
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
     systemctl --user daemon-reload
     systemctl --user enable --now fleet-agent.service
     echo "==> fleet-agent.service enabled and started!"
 fi
+curl -sSf -X POST "${ENROLL_SERVER}/api/v1/complete/${AGENT_NAME}" >/dev/null 2>&1 || curl -sSf "${ENROLL_SERVER}/api/v1/complete/${AGENT_NAME}" >/dev/null 2>&1 || true
 `
 }

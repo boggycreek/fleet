@@ -8,6 +8,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -556,17 +557,32 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 			modelURL = lifecycle.RewriteURLForLAN(modelURL, lanHost)
 		}
 
+		var controllerSSHPubKey string
+		pubKeyCandidates := []string{
+			paths.IDEKeyFile + ".pub",
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			pubKeyCandidates = append(pubKeyCandidates, filepath.Join(home, ".ssh", "fleet.pub"))
+		}
+		for _, pubPath := range pubKeyCandidates {
+			if data, err := os.ReadFile(pubPath); err == nil && len(bytes.TrimSpace(data)) > 0 {
+				controllerSSHPubKey = strings.TrimSpace(string(data))
+				break
+			}
+		}
+
 		secrets := lifecycle.EnrollmentSecrets{
-			AgentName:          cfg.Name,
-			AgentRole:          cfg.Role,
-			AgentSigningKeyPEM: cfg.SigningKeyPEM,
-			ValkeyHost:         valkeyHost,
-			ValkeyPort:         valkeyPort,
-			ValkeyPassword:     cfg.Password,
-			ForgejoURL:         forgejoURL,
-			OpenAIBaseURL:      modelURL,
-			OpenAIModel:        cfg.ModelName,
-			OpenAIAPIKey:       cfg.ModelAPIKey,
+			AgentName:              cfg.Name,
+			AgentRole:              cfg.Role,
+			AgentSigningKeyPEM:     cfg.SigningKeyPEM,
+			ControllerSSHPublicKey: controllerSSHPubKey,
+			ValkeyHost:             valkeyHost,
+			ValkeyPort:             valkeyPort,
+			ValkeyPassword:         cfg.Password,
+			ForgejoURL:             forgejoURL,
+			OpenAIBaseURL:          modelURL,
+			OpenAIModel:            cfg.ModelName,
+			OpenAIAPIKey:           cfg.ModelAPIKey,
 		}
 
 		enrollServer, err := lifecycle.NewEnrollmentServer(lifecycle.EnrollmentConfig{
@@ -600,6 +616,8 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 		}
 
 		fmt.Fprintf(stdout, "[✓] Credentials collected and token burned successfully!\n")
+		_ = enrollServer.WaitForCompletion(ctx)
+		_ = enrollServer.Shutdown(context.Background())
 		fmt.Fprintf(stdout, "Agent %q is now ready.\n", cfg.Name)
 		fmt.Fprintf(stdout, "  SSH:   %s agent ssh %s\n", bin, cfg.Name)
 		fmt.Fprintf(stdout, "  IDE:   %s agent open %s in vscode\n", bin, cfg.Name)
