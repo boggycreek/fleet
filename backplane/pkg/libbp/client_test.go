@@ -1207,6 +1207,15 @@ func TestClientEnsembleOperations(t *testing.T) {
 		t.Errorf("expected read messages, got 0")
 	}
 
+	// Read messages with default lastID and default count
+	defaultMsgs, err := client.ReadEnsembleMessages(ctx, "team-alpha", "", 0)
+	if err != nil {
+		t.Fatalf("ReadEnsembleMessages with defaults failed: %v", err)
+	}
+	if len(defaultMsgs) == 0 {
+		t.Errorf("expected read messages with defaults, got 0")
+	}
+
 	// Leave ensemble
 	if err := client.LeaveEnsemble(ctx, "team-beta"); err != nil {
 		t.Fatalf("LeaveEnsemble failed: %v", err)
@@ -1220,3 +1229,1069 @@ func TestClientEnsembleOperations(t *testing.T) {
 	}
 }
 
+func TestReadEnsembleMessagesEdgeCases(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed starting listener: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	var responseType string
+	var mu sync.Mutex
+
+	setResponse := func(rt string) {
+		mu.Lock()
+		responseType = rt
+		mu.Unlock()
+	}
+	getResponse := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return responseType
+	}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := resp.NewReader(c)
+				w := resp.NewWriter(c)
+				for {
+					val, err := r.ReadValue()
+					if err != nil {
+						return
+					}
+					args, err := val.AsArray()
+					if err != nil || len(args) == 0 {
+						continue
+					}
+					cmd := strings.ToUpper(args[0].String())
+					switch cmd {
+					case "XREAD":
+						rt := getResponse()
+						switch rt {
+						case "empty":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: []resp.Value{}})
+						case "null":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, IsNull: true})
+						case "error":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeError, Str: "ERR Valkey stream read failed"})
+						case "disconnect":
+							return // disconnect client
+						case "malformed_not_array":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "not an array"})
+						case "malformed_stream_not_pair":
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeArray,
+								Array: []resp.Value{
+									{Type: resp.TypeBulkString, Str: "only-one-elem"},
+								},
+							})
+						case "malformed_entries_not_array":
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeArray,
+								Array: []resp.Value{
+									{
+										Type: resp.TypeArray,
+										Array: []resp.Value{
+											{Type: resp.TypeBulkString, Str: "ensemble:test:out"},
+											{Type: resp.TypeBulkString, Str: "not-an-array-of-entries"},
+										},
+									},
+								},
+							})
+						case "malformed_entry_not_pair":
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeArray,
+								Array: []resp.Value{
+									{
+										Type: resp.TypeArray,
+										Array: []resp.Value{
+											{Type: resp.TypeBulkString, Str: "ensemble:test:out"},
+											{
+												Type: resp.TypeArray,
+												Array: []resp.Value{
+													{Type: resp.TypeBulkString, Str: "single-entry-val"},
+												},
+											},
+										},
+									},
+								},
+							})
+						case "malformed_entry_not_map":
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeArray,
+								Array: []resp.Value{
+									{
+										Type: resp.TypeArray,
+										Array: []resp.Value{
+											{Type: resp.TypeBulkString, Str: "ensemble:test:out"},
+											{
+												Type: resp.TypeArray,
+												Array: []resp.Value{
+													{
+														Type: resp.TypeArray,
+														Array: []resp.Value{
+															{Type: resp.TypeBulkString, Str: "100-0"},
+															{Type: resp.TypeBulkString, Str: "odd_len_or_not_map"},
+														},
+													},
+												},
+											},
+										},
+									},
+								},
+							})
+						default:
+							_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: []resp.Value{}})
+						}
+					default:
+						_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "OK"})
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	ctx := context.Background()
+	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-test"})
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	// 1. Empty streams
+	setResponse("empty")
+	msgs, err := client.ReadEnsembleMessages(ctx, "test-stream", "0-0", 10)
+	if err != nil {
+		t.Fatalf("expected no error for empty stream, got: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 msgs, got %d", len(msgs))
+	}
+
+	// 2. Stream read error
+	setResponse("error")
+	_, err = client.ReadEnsembleMessages(ctx, "test-stream", "0-0", 10)
+	if err == nil {
+		t.Fatalf("expected error from Valkey stream read error, got nil")
+	}
+
+	// 3. Network disconnect
+	setResponse("disconnect")
+	_, err = client.ReadEnsembleMessages(ctx, "test-stream", "0-0", 10)
+	if err == nil {
+		t.Fatalf("expected network disconnect error, got nil")
+	}
+
+	// 4. Malformed not an array
+	setResponse("malformed_not_array")
+	_, err = client.ReadEnsembleMessages(ctx, "test-stream", "0-0", 10)
+	if err == nil {
+		t.Fatalf("expected error for malformed non-array response, got nil")
+	}
+
+	// 5. Malformed stream not pair (skipped gracefully, returns empty msgs)
+	setResponse("malformed_stream_not_pair")
+	msgs, err = client.ReadEnsembleMessages(ctx, "test-stream", "0-0", 10)
+	if err != nil {
+		t.Fatalf("unexpected error for stream not pair: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 msgs, got %d", len(msgs))
+	}
+
+	// 6. Malformed entries not array (skipped gracefully, returns empty msgs)
+	setResponse("malformed_entries_not_array")
+	msgs, err = client.ReadEnsembleMessages(ctx, "test-stream", "0-0", 10)
+	if err != nil {
+		t.Fatalf("unexpected error for entries not array: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 msgs, got %d", len(msgs))
+	}
+
+	// 7. Malformed entry not pair (skipped gracefully)
+	setResponse("malformed_entry_not_pair")
+	msgs, err = client.ReadEnsembleMessages(ctx, "test-stream", "0-0", 10)
+	if err != nil {
+		t.Fatalf("unexpected error for entry not pair: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 msgs, got %d", len(msgs))
+	}
+
+	// 8. Malformed entry not map (skipped gracefully)
+	setResponse("malformed_entry_not_map")
+	msgs, err = client.ReadEnsembleMessages(ctx, "test-stream", "0-0", 10)
+	if err != nil {
+		t.Fatalf("unexpected error for entry not map: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 msgs, got %d", len(msgs))
+	}
+}
+
+func TestPeersEdgeCases(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed starting listener: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	var scanPhase string
+	var mu sync.Mutex
+
+	setScanPhase := func(p string) {
+		mu.Lock()
+		scanPhase = p
+		mu.Unlock()
+	}
+	getScanPhase := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return scanPhase
+	}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := resp.NewReader(c)
+				w := resp.NewWriter(c)
+				for {
+					val, err := r.ReadValue()
+					if err != nil {
+						return
+					}
+					args, err := val.AsArray()
+					if err != nil || len(args) == 0 {
+						continue
+					}
+					cmd := strings.ToUpper(args[0].String())
+					phase := getScanPhase()
+
+					switch cmd {
+					case "SCAN":
+						pattern := ""
+						cursor := args[1].String()
+						for i := 2; i < len(args); i++ {
+							if strings.EqualFold(args[i].String(), "MATCH") && i+1 < len(args) {
+								pattern = args[i+1].String()
+							}
+						}
+						switch phase {
+						case "error":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeError, Str: "ERR scan failed"})
+						case "disconnect":
+							return
+						case "malformed_not_array":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "not-an-array"})
+						case "malformed_short_array":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: []resp.Value{{Type: resp.TypeBulkString, Str: "0"}}})
+						case "pagination_and_filter":
+							if pattern == "identity:*" {
+								if cursor == "0" {
+									// Return page 1 with cursor "42", contains human and agent-1
+									_ = w.WriteValue(resp.Value{
+										Type: resp.TypeArray,
+										Array: []resp.Value{
+											{Type: resp.TypeBulkString, Str: "42"},
+											{
+												Type: resp.TypeArray,
+												Array: []resp.Value{
+													{Type: resp.TypeBulkString, Str: "identity:human-admin"},
+													{Type: resp.TypeBulkString, Str: "identity:agent-worker"},
+												},
+											},
+										},
+									})
+								} else {
+									// Return page 2 with cursor "0", contains agent-2
+									_ = w.WriteValue(resp.Value{
+										Type: resp.TypeArray,
+										Array: []resp.Value{
+											{Type: resp.TypeBulkString, Str: "0"},
+											{
+												Type: resp.TypeArray,
+												Array: []resp.Value{
+													{Type: resp.TypeBulkString, Str: "identity:agent-liaison"},
+												},
+											},
+										},
+									})
+								}
+							} else {
+								// *:out scan returns empty
+								_ = w.WriteValue(resp.Value{
+									Type: resp.TypeArray,
+									Array: []resp.Value{
+										{Type: resp.TypeBulkString, Str: "0"},
+										{Type: resp.TypeArray, Array: []resp.Value{}},
+									},
+								})
+							}
+						default:
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeArray,
+								Array: []resp.Value{
+									{Type: resp.TypeBulkString, Str: "0"},
+									{Type: resp.TypeArray, Array: []resp.Value{}},
+								},
+							})
+						}
+
+					case "GET":
+						key := args[1].String()
+						switch key {
+						case KeyLiaisonCurrent:
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, Str: "agent-liaison"})
+						case "identity:human-admin":
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeBulkString,
+								Str:  `{"name":"human-admin","role":"admin","kind":"human"}`,
+							})
+						case "identity:agent-worker":
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeBulkString,
+								Str:  `{"name":"agent-worker","role":"worker","kind":"agent"}`,
+							})
+						case "identity:agent-liaison":
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeBulkString,
+								Str:  `{"name":"agent-liaison","role":"lead","kind":"agent"}`,
+							})
+						case StatusKey("agent-worker"):
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, Str: "busy"})
+						case StatusKey("agent-liaison"):
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, Str: "active"})
+						default:
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, IsNull: true})
+						}
+
+					default:
+						_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "OK"})
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	ctx := context.Background()
+	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-test"})
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	// 1. Context cancel before Peers
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.Peers(cancelCtx)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+
+	// 2. Scan error
+	setScanPhase("error")
+	_, err = client.Peers(ctx)
+	if err == nil {
+		t.Fatalf("expected error on scan failure, got nil")
+	}
+
+	// 3. Scan disconnect
+	setScanPhase("disconnect")
+	_, err = client.Peers(ctx)
+	if err == nil {
+		t.Fatalf("expected error on scan disconnect, got nil")
+	}
+
+	// 4. Malformed scan response not an array (terminates loop gracefully)
+	setScanPhase("malformed_not_array")
+	peers, err := client.Peers(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error for malformed scan: %v", err)
+	}
+	if len(peers) != 0 {
+		t.Errorf("expected 0 peers, got %d", len(peers))
+	}
+
+	// 5. Malformed scan response with < 2 elements (terminates loop gracefully)
+	setScanPhase("malformed_short_array")
+	peers, err = client.Peers(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error for short scan array: %v", err)
+	}
+	if len(peers) != 0 {
+		t.Errorf("expected 0 peers, got %d", len(peers))
+	}
+
+	// 6. Pagination across multiple SCAN pages and Human identity filtering
+	setScanPhase("pagination_and_filter")
+	peers, err = client.Peers(ctx)
+	if err != nil {
+		t.Fatalf("Peers with pagination and filtering failed: %v", err)
+	}
+	// human-admin must be skipped, leaving agent-worker and agent-liaison
+	if len(peers) != 2 {
+		t.Fatalf("expected 2 peers, got %d: %+v", len(peers), peers)
+	}
+
+	var foundWorker, foundLiaison bool
+	for _, p := range peers {
+		if p.ID == "human-admin" {
+			t.Errorf("human-admin should have been filtered out of Peers")
+		}
+		if p.ID == "agent-worker" {
+			foundWorker = true
+			if p.Role != "worker" || p.Status != "busy" || p.IsLiaison {
+				t.Errorf("unexpected agent-worker properties: %+v", p)
+			}
+		}
+		if p.ID == "agent-liaison" {
+			foundLiaison = true
+			if p.Role != "lead" || p.Status != "active" || !p.IsLiaison {
+				t.Errorf("unexpected agent-liaison properties: %+v", p)
+			}
+		}
+	}
+	if !foundWorker || !foundLiaison {
+		t.Errorf("did not find expected peers: %+v", peers)
+	}
+}
+
+func TestGetCursorEdgeCases(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed starting listener: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	var responseType string
+	var mu sync.Mutex
+
+	setResponse := func(rt string) {
+		mu.Lock()
+		responseType = rt
+		mu.Unlock()
+	}
+	getResponse := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return responseType
+	}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := resp.NewReader(c)
+				w := resp.NewWriter(c)
+				for {
+					val, err := r.ReadValue()
+					if err != nil {
+						return
+					}
+					args, err := val.AsArray()
+					if err != nil || len(args) == 0 {
+						continue
+					}
+					cmd := strings.ToUpper(args[0].String())
+					switch cmd {
+					case "HGET":
+						rt := getResponse()
+						switch rt {
+						case "null":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, IsNull: true})
+						case "unexpected_type":
+							// Return an array instead of bulk string
+							_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: []resp.Value{{Type: resp.TypeBulkString, Str: "not-a-string"}}})
+						case "error":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeError, Str: "ERR cursor read error"})
+						case "disconnect":
+							return // disconnect client
+						case "valid":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, Str: "12345-0"})
+						default:
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, IsNull: true})
+						}
+					default:
+						_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "OK"})
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	ctx := context.Background()
+	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-cursor"})
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	// 1. Non-existent cursor key (null response) -> returns "0-0"
+	setResponse("null")
+	cur, err := client.GetCursor(ctx, "nonexistent:stream")
+	if err != nil {
+		t.Fatalf("expected no error for null cursor, got: %v", err)
+	}
+	if cur != "0-0" {
+		t.Errorf("expected cursor '0-0', got %q", cur)
+	}
+
+	// 2. Valid cursor string
+	setResponse("valid")
+	cur, err = client.GetCursor(ctx, "valid:stream")
+	if err != nil {
+		t.Fatalf("expected no error for valid cursor, got: %v", err)
+	}
+	if cur != "12345-0" {
+		t.Errorf("expected cursor '12345-0', got %q", cur)
+	}
+
+	// 3. Unexpected RESP data type (array) -> AsString returns error
+	setResponse("unexpected_type")
+	_, err = client.GetCursor(ctx, "some:stream")
+	if err == nil {
+		t.Fatalf("expected error for unexpected RESP type, got nil")
+	}
+
+	// 4. Command error from Valkey
+	setResponse("error")
+	_, err = client.GetCursor(ctx, "some:stream")
+	if err == nil {
+		t.Fatalf("expected error from Valkey error response, got nil")
+	}
+
+	// 5. Network disconnect
+	setResponse("disconnect")
+	_, err = client.GetCursor(ctx, "some:stream")
+	if err == nil {
+		t.Fatalf("expected error on network disconnect, got nil")
+	}
+
+	// 6. Context cancellation
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.GetCursor(cancelCtx, "some:stream")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+}
+
+func TestGetSpecialtyAgentsEdgeCases(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed starting listener: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	var responseType string
+	var mu sync.Mutex
+
+	setResponse := func(rt string) {
+		mu.Lock()
+		responseType = rt
+		mu.Unlock()
+	}
+	getResponse := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return responseType
+	}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := resp.NewReader(c)
+				w := resp.NewWriter(c)
+				for {
+					val, err := r.ReadValue()
+					if err != nil {
+						return
+					}
+					args, err := val.AsArray()
+					if err != nil || len(args) == 0 {
+						continue
+					}
+					cmd := strings.ToUpper(args[0].String())
+					switch cmd {
+					case "SMEMBERS":
+						rt := getResponse()
+						switch rt {
+						case "null":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, IsNull: true})
+						case "empty":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: []resp.Value{}})
+						case "malformed_not_array":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "not-an-array"})
+						case "element_not_string":
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeArray,
+								Array: []resp.Value{
+									{Type: resp.TypeBulkString, Str: "agent-ok"},
+									{Type: resp.TypeArray, Array: []resp.Value{}}, // element cannot be AsString
+									{Type: resp.TypeBulkString, Str: ""},         // empty string skipped
+								},
+							})
+						case "error":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeError, Str: "ERR Valkey SMEMBERS failed"})
+						case "disconnect":
+							return
+						default:
+							_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: []resp.Value{}})
+						}
+					default:
+						_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "OK"})
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	ctx := context.Background()
+	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-spec"})
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	// 1. Invalid specialty name validation
+	if _, err := client.GetSpecialtyAgents(ctx, "invalid specialty!"); err == nil {
+		t.Fatalf("expected error for invalid specialty name, got nil")
+	}
+
+	// 2. Non-existent specialty role returning null bulk string
+	setResponse("null")
+	agents, err := client.GetSpecialtyAgents(ctx, "databases")
+	if err != nil {
+		t.Fatalf("expected no error for null response, got: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents for null, got %d", len(agents))
+	}
+
+	// 3. Non-existent specialty role returning empty array
+	setResponse("empty")
+	agents, err = client.GetSpecialtyAgents(ctx, "databases")
+	if err != nil {
+		t.Fatalf("expected no error for empty response, got: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents for empty, got %d", len(agents))
+	}
+
+	// 4. Malformed response (not an array) -> returns []string{}, nil gracefully
+	setResponse("malformed_not_array")
+	agents, err = client.GetSpecialtyAgents(ctx, "databases")
+	if err != nil {
+		t.Fatalf("unexpected error for non-array response: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents, got %d", len(agents))
+	}
+
+	// 5. Array containing invalid element types / empty strings
+	setResponse("element_not_string")
+	agents, err = client.GetSpecialtyAgents(ctx, "databases")
+	if err != nil {
+		t.Fatalf("unexpected error for array with non-string: %v", err)
+	}
+	if len(agents) != 1 || agents[0] != "agent-ok" {
+		t.Errorf("expected [agent-ok], got %v", agents)
+	}
+
+	// 6. Command error from Valkey
+	setResponse("error")
+	_, err = client.GetSpecialtyAgents(ctx, "databases")
+	if err == nil {
+		t.Fatalf("expected error from Valkey error response, got nil")
+	}
+
+	// 7. Network disconnect
+	setResponse("disconnect")
+	_, err = client.GetSpecialtyAgents(ctx, "databases")
+	if err == nil {
+		t.Fatalf("expected error on network disconnect, got nil")
+	}
+}
+
+func TestAdditionalClientMethodsEdgeCases(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed starting listener: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	var mu sync.Mutex
+	var respType string
+	setResp := func(s string) {
+		mu.Lock()
+		respType = s
+		mu.Unlock()
+	}
+	getResp := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return respType
+	}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := resp.NewReader(c)
+				w := resp.NewWriter(c)
+				for {
+					val, err := r.ReadValue()
+					if err != nil {
+						return
+					}
+					args, err := val.AsArray()
+					if err != nil || len(args) == 0 {
+						continue
+					}
+					cmd := strings.ToUpper(args[0].String())
+					rt := getResp()
+
+					switch rt {
+					case "error":
+						_ = w.WriteValue(resp.Value{Type: resp.TypeError, Str: "ERR command failed"})
+						continue
+					case "not_array":
+						_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "not-an-array"})
+						continue
+					case "not_map":
+						// Return array with odd number of elements (cannot AsMap)
+						_ = w.WriteValue(resp.Value{
+							Type: resp.TypeArray,
+							Array: []resp.Value{{Type: resp.TypeBulkString, Str: "key-only"}},
+						})
+						continue
+					case "malformed_json":
+						_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, Str: "{not-json"})
+						continue
+					case "disconnect":
+						return
+					}
+
+					switch cmd {
+					case "SMEMBERS":
+						_ = w.WriteValue(resp.Value{
+							Type: resp.TypeArray,
+							Array: []resp.Value{
+								{Type: resp.TypeBulkString, Str: "ensemble-a"},
+								{Type: resp.TypeBulkString, Str: ""},
+							},
+						})
+					case "HGETALL":
+						_ = w.WriteValue(resp.Value{
+							Type: resp.TypeArray,
+							Array: []resp.Value{
+								{Type: resp.TypeBulkString, Str: "role"},
+								{Type: resp.TypeBulkString, Str: "tester"},
+							},
+						})
+					case "GET":
+						_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, Str: "ok-val"})
+					default:
+						_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "OK"})
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	ctx := context.Background()
+	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-edge"})
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	// 1. ListJoinedEnsembles: success with filtering empty string
+	setResp("")
+	ens, err := client.ListJoinedEnsembles(ctx)
+	if err != nil {
+		t.Fatalf("ListJoinedEnsembles failed: %v", err)
+	}
+	if len(ens) != 1 || ens[0] != "ensemble-a" {
+		t.Errorf("expected [ensemble-a], got %v", ens)
+	}
+
+	// 1b. ListJoinedEnsembles: command error
+	setResp("error")
+	_, err = client.ListJoinedEnsembles(ctx)
+	if err == nil {
+		t.Errorf("expected error from ListJoinedEnsembles on error resp")
+	}
+
+	// 1c. ListJoinedEnsembles: not an array
+	setResp("not_array")
+	_, err = client.ListJoinedEnsembles(ctx)
+	if err == nil {
+		t.Errorf("expected error from ListJoinedEnsembles when resp is not array")
+	}
+
+	// 2. GetFinger: not a map (odd element count)
+	setResp("not_map")
+	_, err = client.GetFinger(ctx, "agent-edge")
+	if err == nil {
+		t.Errorf("expected error from GetFinger when resp is not map")
+	}
+
+	// 2b. GetFinger: success
+	setResp("")
+	finger, err := client.GetFinger(ctx, "agent-edge")
+	if err != nil || finger["role"] != "tester" {
+		t.Errorf("GetFinger failed: %v, %v", finger, err)
+	}
+
+	// 3. GetIdentity: malformed JSON record
+	setResp("malformed_json")
+	_, err = client.GetIdentity(ctx, "agent-edge")
+	if err == nil {
+		t.Errorf("expected error from GetIdentity when json is malformed")
+	}
+
+	// 3b. RegisterIdentity: error from Exec
+	setResp("error")
+	err = client.RegisterIdentity(ctx, IdentityRecord{Name: "agent-edge"})
+	if err == nil {
+		t.Errorf("expected error from RegisterIdentity on error response")
+	}
+
+	// 4. GetStatus / GetBlob / GetLiaison context cancel
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := client.GetStatus(cancelCtx, "agent-edge"); !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled for GetStatus, got %v", err)
+	}
+	if _, err := client.GetLiaison(cancelCtx); !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled for GetLiaison, got %v", err)
+	}
+	if _, err := client.GetAllSpecialties(cancelCtx); !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled for GetAllSpecialties, got %v", err)
+	}
+}
+
+func TestRecvEdgeCases(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed starting listener: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	var xreadRespType string
+	var hgetRespType string
+	var scanRespType string
+	var mu sync.Mutex
+
+	setXRead := func(t string) {
+		mu.Lock()
+		xreadRespType = t
+		mu.Unlock()
+	}
+	setHGet := func(t string) {
+		mu.Lock()
+		hgetRespType = t
+		mu.Unlock()
+	}
+	setScan := func(t string) {
+		mu.Lock()
+		scanRespType = t
+		mu.Unlock()
+	}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := resp.NewReader(c)
+				w := resp.NewWriter(c)
+				for {
+					val, err := r.ReadValue()
+					if err != nil {
+						return
+					}
+					args, err := val.AsArray()
+					if err != nil || len(args) == 0 {
+						continue
+					}
+					cmd := strings.ToUpper(args[0].String())
+					mu.Lock()
+					curScan := scanRespType
+					curHGet := hgetRespType
+					curXRead := xreadRespType
+					mu.Unlock()
+
+					switch cmd {
+					case "SCAN":
+						switch curScan {
+						case "disconnect":
+							return
+						case "error":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeError, Str: "ERR scan failed"})
+						default:
+							// return empty scan
+							_ = w.WriteValue(resp.Value{
+								Type: resp.TypeArray,
+								Array: []resp.Value{
+									{Type: resp.TypeBulkString, Str: "0"},
+									{Type: resp.TypeArray, Array: []resp.Value{}},
+								},
+							})
+						}
+					case "HGET":
+						switch curHGet {
+						case "disconnect":
+							return
+						case "error":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeError, Str: "ERR hget failed"})
+						case "empty_cursor":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, Str: ""})
+						default:
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, IsNull: true})
+						}
+					case "XREAD":
+						switch curXRead {
+						case "null":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, IsNull: true})
+						case "nil_error":
+							// RESP nil error
+							_ = w.WriteValue(resp.Value{Type: resp.TypeError, Str: "ERR nil"})
+						case "disconnect":
+							return
+						case "error":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeError, Str: "ERR xread failed"})
+						case "malformed":
+							_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "not-an-array"})
+						default:
+							_ = w.WriteValue(resp.Value{Type: resp.TypeArray, Array: []resp.Value{}})
+						}
+					case "GET":
+						_ = w.WriteValue(resp.Value{Type: resp.TypeBulkString, IsNull: true})
+					default:
+						_ = w.WriteValue(resp.Value{Type: resp.TypeSimpleString, Str: "OK"})
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	ctx := context.Background()
+	client, err := Dial(ctx, ClientConfig{Host: "127.0.0.1", Port: port, AgentID: "agent-recv"})
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	// 1. Context canceled before Recv
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.Recv(cancelCtx, 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+
+	// 2. Peers failure causes Recv to fail
+	setScan("error")
+	_, err = client.Recv(ctx, 0)
+	if err == nil {
+		t.Fatalf("expected error when Peers fails, got nil")
+	}
+	setScan("")
+
+	// 3. GetCursor failure causes Recv to fail
+	setHGet("error")
+	_, err = client.Recv(ctx, 0)
+	if err == nil {
+		t.Fatalf("expected error when GetCursor fails, got nil")
+	}
+	setHGet("")
+
+	// 3b. Empty cursor returned from GetCursor falls back to "0-0"
+	setHGet("empty_cursor")
+	setXRead("null")
+	msgs, err := client.Recv(ctx, 0)
+	if err != nil {
+		t.Fatalf("expected success with empty cursor fallback, got: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 msgs for null xread, got %d", len(msgs))
+	}
+	setHGet("")
+
+	// 4. Null XREAD response returns empty slice
+	setXRead("null")
+	msgs, err = client.Recv(ctx, 0)
+	if err != nil {
+		t.Fatalf("expected no error for null response, got: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 msgs for null response, got %d", len(msgs))
+	}
+
+	// 5. XREAD network disconnect
+	setXRead("disconnect")
+	_, err = client.Recv(ctx, 0)
+	if err == nil {
+		t.Fatalf("expected error on XREAD disconnect, got nil")
+	}
+
+	// 6. XREAD Valkey error
+	setXRead("error")
+	_, err = client.Recv(ctx, 0)
+	if err == nil {
+		t.Fatalf("expected error on XREAD error response, got nil")
+	}
+
+	// 7. XREAD malformed response
+	setXRead("malformed")
+	_, err = client.Recv(ctx, 0)
+	if err == nil {
+		t.Fatalf("expected error on XREAD malformed response, got nil")
+	}
+
+	// 8. Recv with blockSeconds > 0
+	setXRead("null")
+	msgs, err = client.Recv(ctx, 1)
+	if err != nil {
+		t.Fatalf("expected no error for Recv with blockSeconds, got: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 msgs, got %d", len(msgs))
+	}
+}
