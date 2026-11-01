@@ -26,88 +26,61 @@ Welcome to the **Fleet Architecture Visual Walkthrough**. This guide uses struct
 ```mermaid
 flowchart TB
     subgraph Host["Physical Host Machine (Linux / macOS)"]
-        direction TB
         Operator["Human Developer / Operator"]
         HostCLI["Fleet CLI (fleet / ft)"]
         HostSSH["~/.ssh/config (Managed Include)"]
         HostDolt["Platform Dolt Backlog (sndbx-*)"]
-        LocalLLM["Local Inference Gateway (Ollama / vLLM / llama.cpp)\n127.0.0.1:11434 / 8000"]
+        LocalLLM["Local Inference Gateway (Ollama, vLLM, llama.cpp on 127.0.0.1)"]
 
         Operator -->|Administers| HostCLI
         Operator -->|Opens in IDE| HostSSH
         HostCLI -->|Tracks Issues| HostDolt
     end
 
-    subgraph PodmanSandbox["Rootless Podman Container Sandbox"]
-        direction TB
-        
-        subgraph AgentPod["Agent Container (fleet-<name>)"]
-            AgentDaemon["fleet-agent (Daemon PID 1)"]
-            REPLEngine["Cognitive REPL Engine"]
-            Tools["Builtin Tools (bash, edit_file, get_outline)"]
-            MCPServers["MCP Servers (beads, forgejo, memory, sonar)"]
-            InContainerSSH["OpenSSH Daemon (:2222)"]
-            
-            AgentDaemon --> REPLEngine
-            REPLEngine --> Tools
-            REPLEngine --> MCPServers
-        end
+    subgraph AgentPod["Agent Pod Container (fleet-agent)"]
+        AgentDaemon["fleet-agent Daemon (PID 1)"]
+        REPLEngine["Cognitive REPL Engine"]
+        Tools["Builtin Tools: bash, edit_file, get_outline"]
+        MCPServers["MCP Servers: beads, forgejo, memory, sonar"]
+        InContainerSSH["OpenSSH Server (Port 2222)"]
 
-        subgraph SharedInfra["Shared Local Infrastructure (fleet-infra bridge)"]
-            Valkey["Valkey 8 Backplane (fleet-valkey:6379)\nStreams & Pub/Sub"]
-            Forgejo["Forgejo 9 Local Forge (fleet-forgejo:3000)\nTasks & Shared Tools"]
-        end
+        AgentDaemon --> REPLEngine
+        REPLEngine --> Tools
+        REPLEngine --> MCPServers
     end
 
-    HostCLI -->|Orchestrates| AgentPod
-    HostCLI -->|Manages| SharedInfra
-    HostSSH -->|Direct SSH (Port 2222)| InContainerSSH
-    REPLEngine -->|Queries LLM via llm-gateway| LocalLLM
-    AgentDaemon -->|Encrypted Messaging| Valkey
-    MCPServers -->|Task & Code Sync| Forgejo
+    subgraph SharedInfra["Shared Local Infrastructure (fleet-infra bridge)"]
+        Valkey["Valkey 8 Backplane (fleet-valkey:6379 Streams and Pub/Sub)"]
+        Forgejo["Forgejo 9 Local Forge (fleet-forgejo:3000 Tasks and Repos)"]
+    end
 
-    classDef host fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
-    classDef container fill:#0f172a,stroke:#10b981,stroke-width:2px,color:#f8fafc;
-    classDef infra fill:#1e1b4b,stroke:#8b5cf6,stroke-width:2px,color:#f8fafc;
-    class Host host;
-    class AgentPod container;
-    class SharedInfra infra;
+    HostCLI -->|Provisions and Starts| AgentDaemon
+    HostCLI -->|Manages Bridge| Valkey
+    HostCLI -->|Manages Bridge| Forgejo
+    HostSSH -->|Direct SSH over dynamic port| InContainerSSH
+    REPLEngine -->|Queries via llm-gateway| LocalLLM
+    AgentDaemon -->|Encrypted Wire Messaging| Valkey
+    MCPServers -->|Task and Code Sync| Forgejo
 ```
 
 ---
 
 ## 2. Layered OCI Container Hierarchy
 
-Fleet packages its containerized runtime as an immutable, composable OCI hierarchy built on rootless Podman (ADR 00006 & ADR 00043):
+Fleet packages its containerized runtime as an immutable, composable OCI hierarchy built on rootless Podman (ADR 00006 and ADR 00043):
 
 ```mermaid
 flowchart TD
-    BaseImage["1. OS Base Layer (Debian Bookworm Minimal)\n• Non-root agent user (UID/GID 1000)\n• Unprivileged OpenSSH daemon (:2222)\n• Security baselines & drop caps"]
-    
-    ToolBase["2. Tool Base Layer\n• Compilers (Go 1.27, GCC, Make)\n• Runtimes (Node.js/NVM, Deno)\n• Git, Podman client, jq, ripgrep"]
-    
-    DaemonBase["3. Daemon & Supervisor Layer\n• bpd (Autonomous backplane daemon)\n• bp (Messaging CLI)\n• beads (Task tracker CLI)"]
-    
-    MCPSuite["4. Model Context Protocol Suite\n• beads-mcp (Task management)\n• forgejo-mcp (Local git & PRs)\n• memory-mcp (Episodic BM25 memory)\n• sonar-mcp (Deterministic mechanical rules)"]
-    
-    EngineLayer["5. Native Cognitive Engine Layer\n• fleet-agent (Autonomous daemon)\n• REPL cognitive loop\n• Code intelligence AST provider\n• Dynamic reasoning budget"]
+    BaseImage["1. OS Base Layer (Debian Bookworm Minimal) - Non-root user (UID 1000), SSH daemon (2222)"]
+    ToolBase["2. Tool Base Layer - Go 1.27, GCC, Make, Node.js/NVM, Deno, Git, ripgrep"]
+    DaemonBase["3. Daemon and Supervisor Layer - bpd daemon, bp messaging CLI, beads CLI"]
+    MCPSuite["4. Model Context Protocol Suite - beads-mcp, forgejo-mcp, memory-mcp, sonar-mcp"]
+    EngineLayer["5. Native Cognitive Engine Layer - fleet-agent daemon, REPL engine, AST code intelligence"]
 
     BaseImage --> ToolBase
     ToolBase --> DaemonBase
     DaemonBase --> MCPSuite
     MCPSuite --> EngineLayer
-
-    classDef l1 fill:#1e3a8a,stroke:#60a5fa,stroke-width:2px,color:#ffffff;
-    classDef l2 fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#ffffff;
-    classDef l3 fill:#581c87,stroke:#c084fc,stroke-width:2px,color:#ffffff;
-    classDef l4 fill:#701a75,stroke:#f472b6,stroke-width:2px,color:#ffffff;
-    classDef l5 fill:#831843,stroke:#fb7185,stroke-width:2px,color:#ffffff;
-    
-    class BaseImage l1;
-    class ToolBase l2;
-    class DaemonBase l3;
-    class MCPSuite l4;
-    class EngineLayer l5;
 ```
 
 ---
@@ -119,59 +92,61 @@ Inside each running agent container, the autonomous harness coordinates cognitiv
 ```mermaid
 flowchart LR
     subgraph Inputs["Inbound Signals"]
-        TaskGoal["Active Beads Task\n(Goal & Criteria)"]
-        BackplaneMsg["Backplane Message\n(<peer>:inbox)"]
-        OperatorCmd["Operator Prompt\n(SSH / CLI)"]
+        TaskGoal["Active Beads Task Goal"]
+        BackplaneMsg["Backplane Inbox Message"]
+        OperatorCmd["Operator Prompt via SSH or CLI"]
     end
 
     subgraph CognitiveCore["Cognitive Engine (agent/pkg/engine)"]
-        PromptAssembler["Prompt Assembler\n• Pinned Invariants\n• Goal State Preservation\n• Observation Pruning"]
-        LLMQuery["Inference Call\n(http://llm-gateway/v1)\nDynamic Reasoning Budget"]
-        OutputParser["Tool Call Parser\n(Loose & Strict JSON)"]
+        PromptAssembler["Prompt Assembler (Pinned Invariants and Goal State)"]
+        LLMQuery["Inference Call via llm-gateway (Dynamic Reasoning Budget)"]
+        OutputParser["Tool Call Parser (JSON-RPC)"]
     end
 
-    subgraph ToolPerimeter["Tool Execution Perimeter"]
-        ASTGate{"Syntax Gate\n(edit_file)"}
-        OutlineTool["get_outline\n(Go AST & Polyglot)"]
-        WriteTool["write_file\n(Workspace Bound)"]
-        BashTool["bash\n(Unprivileged Subshell)"]
-        MCPCall["MCP Tool Execution\n(STDIO JSON-RPC 2.0)"]
+    subgraph ExecutionPerimeter["Tool Execution Perimeter"]
+        ASTGate{"Syntax Gate (edit_file)"}
+        OutlineTool["get_outline (Go AST and Polyglot)"]
+        WriteTool["write_file (Workspace Bound)"]
+        BashTool["bash (Unprivileged Subshell)"]
+        MCPCall["MCP Tool Execution (JSON-RPC 2.0)"]
     end
 
-    subgraph Verification["Verification Gate"]
-        DiskWrite[("Workspace Disk\n/home/agent/workspace")]
-        RejectSyntax["Syntax Error Rejected\n(Original Intact)"]
+    subgraph Storage["Workspace Storage"]
+        DiskWrite[("Workspace Disk (/home/agent/workspace)")]
+        RejectSyntax["Syntax Error Rejected (Original File Untouched)"]
     end
 
-    Inputs --> PromptAssembler
+    TaskGoal --> PromptAssembler
+    BackplaneMsg --> PromptAssembler
+    OperatorCmd --> PromptAssembler
     PromptAssembler --> LLMQuery
     LLMQuery --> OutputParser
-    OutputParser -->|Calls Tool| ToolPerimeter
 
-    ToolPerimeter --> ASTGate
+    OutputParser --> OutlineTool
+    OutputParser --> WriteTool
+    OutputParser --> BashTool
+    OutputParser --> MCPCall
+    OutputParser --> ASTGate
+
     ASTGate -->|Valid Syntax| DiskWrite
     ASTGate -->|Invalid Syntax| RejectSyntax
     RejectSyntax -->|Feeds Diagnostics Back| PromptAssembler
-
-    classDef core fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
-    classDef gate fill:#312e81,stroke:#a855f7,stroke-width:2px,color:#f8fafc;
-    class CognitiveCore core;
-    class ToolPerimeter gate;
+    WriteTool --> DiskWrite
 ```
 
 ---
 
 ## 4. Cross-Agent Backplane Messaging Fabric
 
-Agents collaborate asynchronously via the high-speed Valkey Streams & Pub/Sub backplane bus (`bp` / `libbp`):
+Agents collaborate asynchronously via the high-speed Valkey Streams and Pub/Sub backplane bus (`bp` / `libbp`):
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Alice as Agent "Alice" (Coder)
+    participant Alice as Agent Alice (Coder)
     participant Bus as Valkey Backplane (fleet-valkey)
     participant BPD as Backplane Daemon (bpd)
-    actor Bob as Agent "Bob" (Reviewer)
+    participant Bob as Agent Bob (Reviewer)
 
     Note over Alice,Bob: Cryptographically Signed Asymmetric Messaging (Ed25519)
     Alice->>Alice: Sign message with Ed25519 private key
@@ -201,33 +176,26 @@ flowchart TD
         Developer["Software Engineer"]
         VSCode["VS Code / Cursor"]
         JetBrains["JetBrains Gateway"]
-        FleetCLI["fleet agent start <name>"]
+        FleetCLI["fleet agent start coder"]
     end
 
     subgraph SSHConfig["Managed OpenSSH Configuration"]
-        MainConfig["~/.ssh/config\nInclude ~/.local/share/fleet/ssh_config"]
-        FleetStanzas["~/.local/share/fleet/ssh_config\nHost fleet-coder\n  HostName 127.0.0.1\n  Port 39281\n  User agent\n  IdentityFile ~/.ssh/fleet"]
+        MainConfig["~/.ssh/config (Include ~/.local/share/fleet/ssh_config)"]
+        FleetStanzas["~/.local/share/fleet/ssh_config (Host fleet-coder on Port 39281)"]
     end
 
     subgraph ContainerTarget["Agent Pod (Rootless Podman)"]
-        SSHD["Dropbear / OpenSSH (:2222)"]
-        Workspace["/home/agent/workspace\n(Project Code & Git)"]
+        SSHD["OpenSSH Server (:2222)"]
+        Workspace["/home/agent/workspace (Project Code and Git)"]
     end
 
-    FleetCLI -->|1. Starts container & dynamic port| ContainerTarget
+    FleetCLI -->|1. Starts container and allocates port| SSHD
     FleetCLI -->|2. Auto-updates SSH stanzas| FleetStanzas
     MainConfig --> FleetStanzas
     Developer -->|3. 'fleet agent open coder in vscode'| VSCode
     VSCode -->|4. ssh fleet-coder| SSHD
     JetBrains -->|ssh fleet-coder| SSHD
     SSHD --> Workspace
-
-    classDef host fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
-    classDef cfg fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#f8fafc;
-    classDef target fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#f8fafc;
-    class HostDev host;
-    class SSHConfig cfg;
-    class ContainerTarget target;
 ```
 
 ---
