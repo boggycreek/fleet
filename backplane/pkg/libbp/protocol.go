@@ -57,6 +57,9 @@ func IdentityKey(id string) string { return fmt.Sprintf("identity:%s", strings.T
 func SpecialtyKey(domain string) string {
 	return fmt.Sprintf("specialty:%s", strings.ToLower(strings.TrimSpace(domain)))
 }
+func PingKey(recipient string) string {
+	return fmt.Sprintf("ping:%s", strings.ToLower(strings.TrimSpace(recipient)))
+}
 
 // EnsembleNameRegex enforces strict ensemble name format (e.g. ^[a-z][a-z0-9-]*$)
 var EnsembleNameRegex = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
