@@ -13,6 +13,7 @@ This directory contains security audit reports, vulnerability assessments, stati
 | **[Adversarial Review Findings](adversarial-review.md)** | Pull Requests & Core | Historical adversarial review findings, attack vectors, and vulnerability remediation records. |
 | **[Backplane Audit Findings](backplane-audit-findings.md)** | `backplane/` | Cryptographic signature validation (Ed25519), RESP stream parser resilience, and concurrency hardening. |
 | **[MCP Suite Audit Findings](mcp-suite-audit-findings.md)** | `mcp/` | Input sanitization, path traversal perimeter verification, and JSON-RPC 2.0 protocol compliance. |
+| **[DevSecOps & Isolation Audit](devsecops-audit-findings.md)** | Full Platform & Runtime | Container perimeter, rootless Podman execution, zero secret leakage, Valkey ACLs, cryptographic integrity, and supply chain review. |
 | **[Shell & CI Audit Findings](shell-and-ci-audit-findings.md)** | Scripts & Workflows | Shellcheck compliance, temporary file creation safety, and GitHub Actions workflow permissions. |
 
 ---
