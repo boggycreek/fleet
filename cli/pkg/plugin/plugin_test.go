@@ -1330,3 +1330,196 @@ func TestEnsureAndRemoveSSHConfigInclude_Errors(t *testing.T) {
 		t.Errorf("expected RemoveSSHConfigInclude to fail when hostSSHConfigFile is a directory")
 	}
 }
+
+type stepFailWriter struct {
+	writeCount int
+	failAt     int
+}
+
+func (s *stepFailWriter) Write(p []byte) (n int, err error) {
+	s.writeCount++
+	if s.writeCount >= s.failAt {
+		return 0, fmt.Errorf("simulated write failure at write %d", s.writeCount)
+	}
+	return len(p), nil
+}
+
+func TestPlatformPathResolutions(t *testing.T) {
+	origGOOS := currentGOOS
+	origHome := userHomeDir
+	defer func() {
+		currentGOOS = origGOOS
+		userHomeDir = origHome
+	}()
+
+	fakeHome := filepath.Join(string(filepath.Separator), "home", "testhome")
+	userHomeDir = func() (string, error) {
+		return fakeHome, nil
+	}
+
+	// 1. Darwin
+	currentGOOS = "darwin"
+	darwinRoots := GetDefaultJetBrainsSearchRoots()
+	if len(darwinRoots) != 1 || !strings.Contains(darwinRoots[0], filepath.Join("Library", "Application Support", "JetBrains")) {
+		t.Errorf("unexpected darwin roots: %v", darwinRoots)
+	}
+	darwinTB := GetDefaultToolboxPluginDir()
+	if !strings.Contains(darwinTB, filepath.Join("Library", "Application Support", "JetBrains", "Toolbox", "plugins", "fleet")) {
+		t.Errorf("unexpected darwin toolbox dir: %s", darwinTB)
+	}
+	darwinSSH := GetDefaultToolboxSSHSettingsPath()
+	if !strings.Contains(darwinSSH, filepath.Join("Library", "Application Support", "JetBrains", "Toolbox", "plugins", "ssh", "settings.json")) {
+		t.Errorf("unexpected darwin toolbox ssh path: %s", darwinSSH)
+	}
+
+	// 2. Windows with APPDATA / LOCALAPPDATA
+	currentGOOS = "windows"
+	t.Setenv("APPDATA", filepath.Join("C:", "Users", "tester", "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join("C:", "Users", "tester", "AppData", "Local"))
+
+	winRoots := GetDefaultJetBrainsSearchRoots()
+	if len(winRoots) != 1 || !strings.Contains(winRoots[0], filepath.Join("AppData", "Roaming", "JetBrains")) {
+		t.Errorf("unexpected windows search roots with APPDATA: %v", winRoots)
+	}
+	winTB := GetDefaultToolboxPluginDir()
+	if !strings.Contains(winTB, filepath.Join("AppData", "Local", "JetBrains", "Toolbox", "plugins", "fleet")) {
+		t.Errorf("unexpected windows toolbox dir with LOCALAPPDATA: %s", winTB)
+	}
+	winSSH := GetDefaultToolboxSSHSettingsPath()
+	if !strings.Contains(winSSH, filepath.Join("AppData", "Local", "JetBrains", "Toolbox", "plugins", "ssh", "settings.json")) {
+		t.Errorf("unexpected windows ssh path with LOCALAPPDATA: %s", winSSH)
+	}
+
+	// 3. Windows without APPDATA / LOCALAPPDATA
+	t.Setenv("APPDATA", "")
+	t.Setenv("LOCALAPPDATA", "")
+	winRootsNoApp := GetDefaultJetBrainsSearchRoots()
+	if len(winRootsNoApp) != 0 {
+		t.Errorf("expected 0 windows roots without APPDATA, got: %v", winRootsNoApp)
+	}
+	winTBNoApp := GetDefaultToolboxPluginDir()
+	if !strings.Contains(winTBNoApp, filepath.Join(fakeHome, "AppData", "Local", "JetBrains", "Toolbox", "plugins", "fleet")) {
+		t.Errorf("unexpected windows toolbox dir without LOCALAPPDATA: %s", winTBNoApp)
+	}
+	winSSHNoApp := GetDefaultToolboxSSHSettingsPath()
+	if !strings.Contains(winSSHNoApp, filepath.Join(fakeHome, "AppData", "Local", "JetBrains", "Toolbox", "plugins", "ssh", "settings.json")) {
+		t.Errorf("unexpected windows ssh path without LOCALAPPDATA: %s", winSSHNoApp)
+	}
+
+	// 4. Linux / Default Unix
+	currentGOOS = "linux"
+	linuxRoots := GetDefaultJetBrainsSearchRoots()
+	if len(linuxRoots) != 2 || !strings.Contains(linuxRoots[0], ".local") || !strings.Contains(linuxRoots[1], ".config") {
+		t.Errorf("unexpected linux search roots: %v", linuxRoots)
+	}
+	linuxTB := GetDefaultToolboxPluginDir()
+	if !strings.Contains(linuxTB, filepath.Join(".local", "share", "JetBrains", "Toolbox", "plugins", "fleet")) {
+		t.Errorf("unexpected linux toolbox dir: %s", linuxTB)
+	}
+	linuxSSH := GetDefaultToolboxSSHSettingsPath()
+	if !strings.Contains(linuxSSH, filepath.Join(".local", "share", "JetBrains", "Toolbox", "plugins", "ssh", "settings.json")) {
+		t.Errorf("unexpected linux toolbox ssh path: %s", linuxSSH)
+	}
+
+	// 5. UserHomeDir error path across all functions
+	userHomeDir = func() (string, error) {
+		return "", fmt.Errorf("simulated home dir error")
+	}
+	if roots := GetDefaultJetBrainsSearchRoots(); roots != nil {
+		t.Errorf("expected nil roots on home dir error, got: %v", roots)
+	}
+	if tb := GetDefaultToolboxPluginDir(); tb != "" {
+		t.Errorf("expected empty toolbox dir on home dir error, got: %s", tb)
+	}
+	if ssh := GetDefaultToolboxSSHSettingsPath(); ssh != "" {
+		t.Errorf("expected empty ssh path on home dir error, got: %s", ssh)
+	}
+}
+
+func TestGenerateJAR_ErrorPaths(t *testing.T) {
+	origNewZipWriter := newZipWriter
+	defer func() {
+		newZipWriter = origNewZipWriter
+	}()
+
+	// 1. Closed writer causing Create error
+	newZipWriter = func(w io.Writer) *zip.Writer {
+		zw := zip.NewWriter(w)
+		_ = zw.Close()
+		return zw
+	}
+
+	if _, err := GenerateGatewayPluginJAR(); err == nil {
+		t.Errorf("expected error from GenerateGatewayPluginJAR when zip.Writer is closed")
+	}
+	if _, err := GenerateToolboxPluginJAR(); err == nil {
+		t.Errorf("expected error from GenerateToolboxPluginJAR when zip.Writer is closed")
+	}
+
+	// 2. Step writer failing on write
+	stepWriter := &stepFailWriter{failAt: 1}
+	newZipWriter = func(w io.Writer) *zip.Writer {
+		return zip.NewWriter(stepWriter)
+	}
+	if _, err := GenerateGatewayPluginJAR(); err == nil {
+		t.Errorf("expected error from GenerateGatewayPluginJAR at step 1")
+	}
+	if _, err := GenerateToolboxPluginJAR(); err == nil {
+		t.Errorf("expected error from GenerateToolboxPluginJAR at step 1")
+	}
+}
+
+func TestInstallGatewayPlugin_DiscoveredIDEAndErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := config.Paths{
+		DataHome:      filepath.Join(tmpDir, "data"),
+		AgentsDir:     filepath.Join(tmpDir, "data", "agents"),
+		SSHConfigFile: filepath.Join(tmpDir, "data", "ssh_config"),
+	}
+	_ = paths.EnsureDirectories()
+
+	// Create mock discovered IDE directory
+	origHome := userHomeDir
+	origGOOS := currentGOOS
+	defer func() {
+		userHomeDir = origHome
+		currentGOOS = origGOOS
+	}()
+	userHomeDir = func() (string, error) {
+		return tmpDir, nil
+	}
+	currentGOOS = "linux"
+
+	ideRoot := filepath.Join(tmpDir, ".local", "share", "JetBrains")
+	mockIDE := filepath.Join(ideRoot, "JetBrainsGateway2024.1")
+	_ = os.MkdirAll(mockIDE, 0755)
+
+	var out bytes.Buffer
+	res, err := InstallGatewayPlugin(context.Background(), paths, &out)
+	if err != nil {
+		t.Fatalf("InstallGatewayPlugin failed: %v", err)
+	}
+	if len(res.InstalledPaths) < 2 {
+		t.Errorf("expected central and discovered IDE jar installed, got: %v", res.InstalledPaths)
+	}
+
+	// Unwritable central directory jar (file exists as a directory where jar should be)
+	conflictDir := filepath.Join(paths.DataHome, "plugins", "jetbrains-gateway", "fleet-gateway", "lib", "fleet-gateway.jar")
+	_ = os.Remove(conflictDir)
+	_ = os.MkdirAll(filepath.Join(conflictDir, "sub"), 0755)
+	if _, err := InstallGatewayPlugin(context.Background(), paths, &out); err == nil {
+		t.Errorf("expected error when central jar path is an unoverwritable directory")
+	}
+
+	// Error generating JAR
+	origNewZipWriter := newZipWriter
+	defer func() { newZipWriter = origNewZipWriter }()
+	newZipWriter = func(w io.Writer) *zip.Writer {
+		zw := zip.NewWriter(w)
+		_ = zw.Close()
+		return zw
+	}
+	if _, err := InstallGatewayPlugin(context.Background(), paths, &out); err == nil {
+		t.Errorf("expected error when JAR generation fails")
+	}
+}
