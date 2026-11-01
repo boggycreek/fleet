@@ -131,3 +131,172 @@ tier1_abstract: Abstract
 		t.Errorf("expected empty tags, got %v", item.Tags)
 	}
 }
+
+func TestReadLines(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: nil,
+		},
+		{
+			name:     "single line without trailing newline",
+			input:    "line one",
+			expected: []string{"line one"},
+		},
+		{
+			name:     "multiple lines with standard unix newlines",
+			input:    "line 1\nline 2\nline 3\n",
+			expected: []string{"line 1", "line 2", "line 3"},
+		},
+		{
+			name:     "crlf windows line endings",
+			input:    "hello\r\nworld\r\n",
+			expected: []string{"hello", "world"},
+		},
+		{
+			name:     "empty lines preserved",
+			input:    "first\n\nsecond",
+			expected: []string{"first", "", "second"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := readLines(tc.input)
+			if len(got) != len(tc.expected) {
+				t.Fatalf("readLines(%q) returned %d lines, want %d: %v", tc.input, len(got), len(tc.expected), got)
+			}
+			for i := range got {
+				if got[i] != tc.expected[i] {
+					t.Errorf("line %d mismatch: got %q, want %q", i, got[i], tc.expected[i])
+				}
+			}
+		})
+	}
+}
+
+func TestParseTagsValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: nil,
+		},
+		{
+			name:     "empty brackets",
+			input:    "[]",
+			expected: nil,
+		},
+		{
+			name:     "spaces in brackets",
+			input:    "[  ]",
+			expected: nil,
+		},
+		{
+			name:     "whitespace string",
+			input:    "   ",
+			expected: nil,
+		},
+		{
+			name:     "bracketed list with quotes and extra spaces",
+			input:    `[ tag1 , "tag2" , 'tag3' , ]`,
+			expected: []string{"tag1", "tag2", "tag3"},
+		},
+		{
+			name:     "single unbracketed scalar",
+			input:    "single-tag",
+			expected: []string{"single-tag"},
+		},
+		{
+			name:     "single quoted scalar",
+			input:    `"quoted-single"`,
+			expected: []string{"quoted-single"},
+		},
+		{
+			name:     "single single-quoted scalar",
+			input:    `'single-quoted'`,
+			expected: []string{"single-quoted"},
+		},
+		{
+			name:     "empty scalar in quotes",
+			input:    `""`,
+			expected: nil,
+		},
+		{
+			name:     "malformed brackets without closing",
+			input:    "[unclosed, tag",
+			expected: []string{"[unclosed, tag"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseTagsValue(tc.input)
+			if len(got) != len(tc.expected) {
+				t.Fatalf("parseTagsValue(%q) returned %d items, want %d: %v", tc.input, len(got), len(tc.expected), got)
+			}
+			for i := range got {
+				if got[i] != tc.expected[i] {
+					t.Errorf("item %d mismatch: got %q, want %q", i, got[i], tc.expected[i])
+				}
+			}
+		})
+	}
+}
+
+func TestParseDocumentAdditionalEdgeCases(t *testing.T) {
+	// Multiline continuation for tier2_summary, comments, empty lines
+	content := `
+---
+# This is a comment
+id: mem-edge-1
+pillar: evaluative
+title: Edge Case Doc
+tags:
+  - tag-a
+  - "tag-b"
+  -
+tier1_abstract: Abstract line 1
+ Abstract line 2
+tier2_summary: Summary initial line
+ Summary continuation line 1
+ Summary continuation line 2
+---
+# Markdown Header
+Document body goes here.
+`
+	item, err := ParseDocument(content)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+
+	if item.ID != "mem-edge-1" {
+		t.Errorf("expected ID mem-edge-1, got %q", item.ID)
+	}
+	if len(item.Tags) != 2 {
+		t.Fatalf("expected 2 tags (ignoring empty item), got %d: %v", len(item.Tags), item.Tags)
+	}
+	if item.Tags[0] != "tag-a" || item.Tags[1] != "tag-b" {
+		t.Errorf("unexpected tags: %v", item.Tags)
+	}
+	expectedTier1 := "Abstract line 1 Abstract line 2"
+	if item.Tier1Abstract != expectedTier1 {
+		t.Errorf("Tier1Abstract mismatch: got %q, want %q", item.Tier1Abstract, expectedTier1)
+	}
+	expectedTier2 := "Summary initial line Summary continuation line 1 Summary continuation line 2"
+	if item.Tier2Summary != expectedTier2 {
+		t.Errorf("Tier2Summary mismatch: got %q, want %q", item.Tier2Summary, expectedTier2)
+	}
+	if item.Body != "# Markdown Header\nDocument body goes here." {
+		t.Errorf("Body mismatch: got %q", item.Body)
+	}
+}
