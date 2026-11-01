@@ -11,12 +11,22 @@ import (
 	"path/filepath"
 )
 
+// LSPConfig specifies configuration for an external LSP server driver.
+type LSPConfig struct {
+	Name           string         `json:"name,omitempty"`
+	Command        string         `json:"command"`
+	Args           []string       `json:"args,omitempty"`
+	Languages      []string       `json:"languages"`
+	Initialization map[string]any `json:"initialization_options,omitempty"`
+}
+
 // Config defines the declarative code intelligence configuration loaded from
 // .fleet/intel.json or .agent_config.json.
 type Config struct {
 	DefaultProvider string            `json:"default_provider,omitempty"`
 	Providers       map[string]string `json:"providers,omitempty"` // file extension -> driver name
 	Disabled        []string          `json:"disabled,omitempty"`  // driver names to disable
+	LSPServers      []LSPConfig       `json:"lsp_servers,omitempty"`
 }
 
 // NewDefaultRegistry instantiates a Registry pre-populated with NativeGoDriver,
@@ -51,13 +61,13 @@ func LoadRegistry(workspaceDir string) (*Registry, error) {
 		return reg, err
 	}
 
-	// If disabled drivers are specified, construct a filtered registry
-	if len(cfg.Disabled) > 0 {
-		disabledSet := make(map[string]bool)
-		for _, d := range cfg.Disabled {
-			disabledSet[d] = true
-		}
+	disabledSet := make(map[string]bool)
+	for _, d := range cfg.Disabled {
+		disabledSet[d] = true
+	}
 
+	// If disabled drivers are specified, construct a filtered registry base
+	if len(cfg.Disabled) > 0 {
 		filteredReg := NewRegistry()
 		if !disabledSet["native-go"] {
 			filteredReg.Register(NewNativeGoDriver())
@@ -68,7 +78,27 @@ func LoadRegistry(workspaceDir string) (*Registry, error) {
 		if !disabledSet["universal-fallback"] {
 			filteredReg.Register(NewUniversalFallbackDriver())
 		}
-		return filteredReg, nil
+		reg = filteredReg
+	}
+
+	// Register any configured LSP drivers
+	for _, lspCfg := range cfg.LSPServers {
+		name := lspCfg.Name
+		if name == "" {
+			name = "lsp"
+		}
+		if disabledSet[name] || disabledSet["lsp"] {
+			continue
+		}
+		driver := NewLSPDriver(LSPDriverConfig{
+			Name:           name,
+			Command:        lspCfg.Command,
+			Args:           lspCfg.Args,
+			Languages:      lspCfg.Languages,
+			WorkspaceDir:   workspaceDir,
+			Initialization: lspCfg.Initialization,
+		})
+		reg.Register(driver)
 	}
 
 	return reg, nil
