@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/boggycreek/fleet/agent/pkg/codeintel"
 	"github.com/boggycreek/fleet/agent/pkg/runtime"
 )
 
@@ -343,6 +344,14 @@ func (t *WriteFileTool) Execute(_ context.Context, args map[string]any) (string,
 // EditFileTool performs exact string replacement on a file within the workspace.
 type EditFileTool struct {
 	workspaceDir string
+	intelReg     *codeintel.Registry
+}
+
+func (t *EditFileTool) getIntelRegistry() *codeintel.Registry {
+	if t.intelReg != nil {
+		return t.intelReg
+	}
+	return codeintel.NewDefaultRegistry()
 }
 
 func (t *EditFileTool) Name() string { return "edit_file" }
@@ -370,7 +379,7 @@ func (t *EditFileTool) Parameters() map[string]any {
 	}
 }
 
-func (t *EditFileTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	path, ok := args["path"].(string)
 	if !ok || strings.TrimSpace(path) == "" {
 		return "", errors.New("path argument is required")
@@ -404,6 +413,24 @@ func (t *EditFileTool) Execute(_ context.Context, args map[string]any) (string, 
 	}
 
 	modified := strings.Replace(content, oldText, newText, 1)
+
+	// Pre-validation syntax gate: reject edits that introduce syntax errors
+	relPath, relErr := filepath.Rel(t.workspaceDir, resolved)
+	if relErr != nil || relPath == "" {
+		relPath = path
+	}
+
+	reg := t.getIntelRegistry()
+	diags, valErr := reg.ValidateSyntax(ctx, resolved, []byte(modified))
+	if valErr != nil {
+		return "", fmt.Errorf("syntax validation failed: %w", valErr)
+	}
+	for _, diag := range diags {
+		if diag.Severity == codeintel.SeverityError {
+			return "", fmt.Errorf("edit rejected: syntax error in %s at line %d: %s", relPath, diag.Line, diag.Message)
+		}
+	}
+
 	if err := os.WriteFile(resolved, []byte(modified), 0644); err != nil {
 		return "", fmt.Errorf("failed to write edited file: %w", err)
 	}
@@ -673,18 +700,84 @@ func searchFile(filePath, relPath string, re *regexp.Regexp, maxResults int, cur
 	return nil
 }
 
-// RegisterBuiltinTools registers bash, read_file, write_file, edit_file, list_dir, and grep_search to registry.
+// GetOutlineTool extracts a structural code outline from a source file using the code intelligence provider.
+type GetOutlineTool struct {
+	workspaceDir string
+	intelReg     *codeintel.Registry
+}
+
+func (t *GetOutlineTool) getIntelRegistry() *codeintel.Registry {
+	if t.intelReg != nil {
+		return t.intelReg
+	}
+	return codeintel.NewDefaultRegistry()
+}
+
+func (t *GetOutlineTool) Name() string { return "get_outline" }
+func (t *GetOutlineTool) Description() string {
+	return "Extract a structural code outline (classes, functions, interfaces, signatures) from a source file using the code intelligence provider"
+}
+func (t *GetOutlineTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Relative or workspace-scoped path of the source file to outline",
+			},
+		},
+		"required": []string{"path"},
+	}
+}
+
+func (t *GetOutlineTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+	path, ok := args["path"].(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return "", errors.New("path argument is required")
+	}
+
+	resolved, err := ResolveWorkspacePath(t.workspaceDir, path)
+	if err != nil {
+		return "", err
+	}
+
+	content, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+
+	relPath, err := filepath.Rel(t.workspaceDir, resolved)
+	if err != nil || relPath == "" {
+		relPath = path
+	}
+
+	reg := t.getIntelRegistry()
+	outline, err := reg.GetOutline(ctx, resolved, content)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract outline: %w", err)
+	}
+
+	outline.FilePath = relPath
+	return codeintel.FormatOutlineMarkdown(outline), nil
+}
+
+// RegisterBuiltinTools registers bash, read_file, write_file, edit_file, list_dir, grep_search, and get_outline to registry.
 func RegisterBuiltinTools(r *Registry, workspaceDir string) error {
 	if r == nil {
 		return errors.New("registry cannot be nil")
+	}
+	intelReg, _ := codeintel.LoadRegistry(workspaceDir)
+	if intelReg == nil {
+		intelReg = codeintel.NewDefaultRegistry()
 	}
 	tools := []Tool{
 		&BashTool{workspaceDir: workspaceDir},
 		&ReadFileTool{workspaceDir: workspaceDir},
 		&WriteFileTool{workspaceDir: workspaceDir},
-		&EditFileTool{workspaceDir: workspaceDir},
+		&EditFileTool{workspaceDir: workspaceDir, intelReg: intelReg},
 		&ListDirTool{workspaceDir: workspaceDir},
 		&GrepSearchTool{workspaceDir: workspaceDir},
+		&GetOutlineTool{workspaceDir: workspaceDir, intelReg: intelReg},
 	}
 	for _, tool := range tools {
 		if err := r.Register(tool); err != nil {

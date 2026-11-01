@@ -289,7 +289,7 @@ func TestToolsParametersAndDescriptions(t *testing.T) {
 	reg := NewRegistry()
 	RegisterBuiltinTools(reg, tmpDir)
 
-	expectedOrder := []string{"bash", "edit_file", "grep_search", "list_dir", "read_file", "write_file"}
+	expectedOrder := []string{"bash", "edit_file", "get_outline", "grep_search", "list_dir", "read_file", "write_file"}
 	for _, name := range expectedOrder {
 		tool, ok := reg.Get(name)
 		if !ok {
@@ -304,10 +304,10 @@ func TestToolsParametersAndDescriptions(t *testing.T) {
 		}
 	}
 
-	// Schema conversion should succeed and contain 6 definitions in alphabetical order
+	// Schema conversion should succeed and contain 7 definitions in alphabetical order
 	openAITools := reg.ToOpenAITools()
-	if len(openAITools) != 6 {
-		t.Fatalf("expected 6 openAI tools, got %d", len(openAITools))
+	if len(openAITools) != 7 {
+		t.Fatalf("expected 7 openAI tools, got %d", len(openAITools))
 	}
 	for i, ot := range openAITools {
 		fn := ot["function"].(map[string]any)
@@ -571,6 +571,11 @@ func TestToolPathTraversalErrors(t *testing.T) {
 	ef := &EditFileTool{workspaceDir: tmpDir}
 	if _, err := ef.Execute(ctx, map[string]any{"path": "../escape.txt", "old_text": "a", "new_text": "b"}); err == nil {
 		t.Error("expected path traversal error on edit_file")
+	}
+
+	got := &GetOutlineTool{workspaceDir: tmpDir}
+	if _, err := got.Execute(ctx, map[string]any{"path": "../escape.go"}); err == nil {
+		t.Error("expected path traversal error on get_outline")
 	}
 }
 
@@ -974,5 +979,164 @@ func TestGrepSearchTool(t *testing.T) {
 	}
 	if !strings.Contains(outLong, "longline.txt:1: MATCH_START") {
 		t.Errorf("expected match for long line, got: %q", outLong)
+	}
+}
+
+func TestGetOutlineTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+
+	reg := NewRegistry()
+	if err := RegisterBuiltinTools(reg, tmpDir); err != nil {
+		t.Fatalf("failed to register builtin tools: %v", err)
+	}
+
+	outlineTool, ok := reg.Get("get_outline")
+	if !ok {
+		t.Fatal("get_outline tool not registered")
+	}
+
+	// 1. Missing or invalid path argument
+	if _, err := outlineTool.Execute(ctx, map[string]any{}); err == nil {
+		t.Error("expected error for missing path")
+	}
+	if _, err := outlineTool.Execute(ctx, map[string]any{"path": ""}); err == nil {
+		t.Error("expected error for empty path")
+	}
+
+	// 2. Non-existent file
+	if _, err := outlineTool.Execute(ctx, map[string]any{"path": "nonexistent.go"}); err == nil {
+		t.Error("expected error for non-existent file")
+	}
+
+	// 3. Valid Go file outline
+	goCode := `package main
+
+type Server struct {
+	Port int
+}
+
+func (s *Server) Start() error {
+	return nil
+}
+`
+	filePath := filepath.Join(tmpDir, "server.go")
+	if err := os.WriteFile(filePath, []byte(goCode), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	out, err := outlineTool.Execute(ctx, map[string]any{"path": "server.go"})
+	if err != nil {
+		t.Fatalf("get_outline failed: %v", err)
+	}
+	if !strings.Contains(out, "## Outline: server.go") {
+		t.Errorf("expected outline header, got: %s", out)
+	}
+	if !strings.Contains(out, "type Server struct") {
+		t.Errorf("expected Server struct, got: %s", out)
+	}
+	if !strings.Contains(out, "func (s *Server) Start() error") {
+		t.Errorf("expected Start method, got: %s", out)
+	}
+
+	// 4. Broken Go file outline error
+	brokenPath := filepath.Join(tmpDir, "broken.go")
+	_ = os.WriteFile(brokenPath, []byte("package"), 0644)
+	if _, err := outlineTool.Execute(ctx, map[string]any{"path": "broken.go"}); err == nil {
+		t.Error("expected error parsing broken Go file")
+	}
+
+	// 5. Plain text / fallback file outline
+	mdContent := "# Readme Title\n\ndef helper():\n    pass\n"
+	_ = os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte(mdContent), 0644)
+	mdOut, err := outlineTool.Execute(ctx, map[string]any{"path": "README.md"})
+	if err != nil {
+		t.Fatalf("get_outline failed on README.md: %v", err)
+	}
+	if !strings.Contains(mdOut, "Readme Title") {
+		t.Errorf("expected heading in markdown outline, got: %s", mdOut)
+	}
+}
+
+func TestEditFileSyntaxPreValidationGate(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+
+	reg := NewRegistry()
+	if err := RegisterBuiltinTools(reg, tmpDir); err != nil {
+		t.Fatalf("failed to register builtin tools: %v", err)
+	}
+
+	editTool, ok := reg.Get("edit_file")
+	if !ok {
+		t.Fatal("edit_file tool not registered")
+	}
+
+	// Write initial valid Go file
+	initialCode := `package main
+
+func Add(a, b int) int {
+	return a + b
+}
+`
+	goFile := filepath.Join(tmpDir, "math.go")
+	if err := os.WriteFile(goFile, []byte(initialCode), 0644); err != nil {
+		t.Fatalf("failed to write initial Go file: %v", err)
+	}
+
+	// 1. Valid edit succeeds
+	validEdit, err := editTool.Execute(ctx, map[string]any{
+		"path":     "math.go",
+		"old_text": "return a + b",
+		"new_text": "return (a + b)",
+	})
+	if err != nil {
+		t.Fatalf("valid edit failed: %v", err)
+	}
+	if !strings.Contains(validEdit, "Successfully edited math.go") {
+		t.Errorf("unexpected edit result: %s", validEdit)
+	}
+
+	// Verify disk file was updated
+	diskData, _ := os.ReadFile(goFile)
+	if !strings.Contains(string(diskData), "return (a + b)") {
+		t.Errorf("expected file on disk to have updated content: %s", string(diskData))
+	}
+
+	// 2. Edit that introduces Go syntax error MUST be rejected
+	_, err = editTool.Execute(ctx, map[string]any{
+		"path":     "math.go",
+		"old_text": "return (a + b)",
+		"new_text": "return a +", // syntax error: unexpected newline / incomplete expression
+	})
+	if err == nil {
+		t.Fatal("expected edit with syntax error to be rejected!")
+	}
+	if !strings.Contains(err.Error(), "edit rejected: syntax error in math.go at line") {
+		t.Errorf("expected syntax rejection error message, got: %v", err)
+	}
+
+	// Verify disk file was NOT modified by the broken edit
+	diskDataAfterBroken, _ := os.ReadFile(goFile)
+	if !strings.Contains(string(diskDataAfterBroken), "return (a + b)") {
+		t.Errorf("disk content was corrupted despite syntax error: %s", string(diskDataAfterBroken))
+	}
+	if strings.Contains(string(diskDataAfterBroken), "return a +") {
+		t.Errorf("broken edit was written to disk: %s", string(diskDataAfterBroken))
+	}
+
+	// 3. Edit on non-Go file (e.g. .txt) with arbitrary text should succeed
+	txtFile := filepath.Join(tmpDir, "notes.txt")
+	_ = os.WriteFile(txtFile, []byte("Hello world"), 0644)
+	txtEdit, err := editTool.Execute(ctx, map[string]any{
+		"path":     "notes.txt",
+		"old_text": "Hello world",
+		"new_text": "function not_valid_go() { broken",
+	})
+	if err != nil {
+		t.Fatalf("non-go file edit failed: %v", err)
+	}
+	if !strings.Contains(txtEdit, "Successfully edited notes.txt") {
+		t.Errorf("unexpected edit output: %s", txtEdit)
 	}
 }
