@@ -39,6 +39,7 @@ type REPLEngine struct {
 	registry           *tools.Registry
 	responder          TurnResponder
 	priorityResolver   TaskPriorityResolver
+	pinnedTask         *TaskSnapshot
 	agentID            string
 	humanName          string
 	workspaceDir       string
@@ -241,6 +242,31 @@ func (e *REPLEngine) SetMaxToolIterations(n int) {
 	}
 }
 
+// SetPinnedTask configures or refreshes the active task snapshot directive.
+// If an active session is already initialized with a system prompt at index 0,
+// the system prompt is automatically refreshed to reflect the updated pinned goal.
+func (e *REPLEngine) SetPinnedTask(task *TaskSnapshot) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.pinnedTask = task.Clone()
+
+	// Update existing system prompt if present in history
+	if len(e.history) > 0 && e.history[0].Role == "system" {
+		agentID := e.agentID
+		if agentID == "" {
+			agentID = "fleet-agent"
+		}
+		e.history[0].Content = BuildSystemPromptWithGoal(agentID, e.role, e.workspaceDir, e.customInstructions, e.pinnedTask)
+	}
+}
+
+// GetPinnedTask returns a copy of the active task snapshot.
+func (e *REPLEngine) GetPinnedTask() *TaskSnapshot {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.pinnedTask.Clone()
+}
+
 // SetCustomInstructions configures custom system instructions.
 func (e *REPLEngine) SetCustomInstructions(instructions string) {
 	e.mu.Lock()
@@ -299,7 +325,7 @@ func (e *REPLEngine) Start(ctx context.Context, bus *runtime.EventBus, state *ru
 	}
 	// Initialize history with foundational system prompt if missing
 	if len(e.history) == 0 || e.history[0].Role != "system" {
-		sysPrompt := BuildSystemPrompt(agentID, e.role, e.workspaceDir, e.customInstructions)
+		sysPrompt := BuildSystemPromptWithGoal(agentID, e.role, e.workspaceDir, e.customInstructions, e.pinnedTask)
 		e.history = append([]ChatMessage{{
 			Role:    "system",
 			Content: sysPrompt,
