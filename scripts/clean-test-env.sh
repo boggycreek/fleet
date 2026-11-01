@@ -29,7 +29,7 @@ if command -v podman >/dev/null 2>&1; then
   TEST_PODS=$(podman pod ls --format '{{.Name}}' 2>/dev/null | grep -E '^(test-|infra-test-|unit-test-|mock-start-)' | grep -v -E '^(fleet-|agent-sandbox-)' || true)
   if [ -n "${TEST_PODS}" ]; then
     echo "Stopping and removing ephemeral test pods: ${TEST_PODS}"
-    echo "${TEST_PODS}" | xargs -r -n 1 podman pod rm -f 2>/dev/null || true
+    echo "${TEST_PODS}" | xargs -n 1 podman pod rm -f 2>/dev/null || true
   fi
 
   # Remove ephemeral test networks (safeguarding fleet-infra and agent-sandbox-infra)
