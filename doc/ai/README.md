@@ -42,7 +42,6 @@ Empirical research spikes, benchmarks, and exploratory evaluations covering loca
 - **[Liquid AI LFM Model Evaluation](evaluations/liquid-ai-lfm-evaluation.md)**
 - **[Multi-Machine Local Network Federation & Gateway DNS](evaluations/multi-machine-network-federation.md)**
 - **[NVIDIA OpenShell Evaluation](evaluations/nvidia-openshell-evaluation.md)**
-- **[OpenClaw Concurrency Patterns](evaluations/openclaw-concurrency-patterns.md)**
 - **[Valkey Pub/Sub Evaluation](evaluations/valkey-pubsub-evaluation.md)**
 - **[Valkey Stream Guard Evaluation](evaluations/valkey-stream-guard-evaluation.md)**
 
