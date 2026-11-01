@@ -24,6 +24,12 @@ const (
 
 // BuildSystemPrompt constructs the foundational system instruction prompt for the agent.
 func BuildSystemPrompt(agentID, role, workspaceDir, customInstructions string) string {
+	return BuildSystemPromptWithGoal(agentID, role, workspaceDir, customInstructions, nil)
+}
+
+// BuildSystemPromptWithGoal constructs the foundational system instruction prompt for the agent,
+// injecting a pinned active task goal directive if provided.
+func BuildSystemPromptWithGoal(agentID, role, workspaceDir, customInstructions string, task *TaskSnapshot) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("You are %s, an autonomous AI software engineering agent running inside an isolated sandbox.\n", agentID))
 	if role != "" {
@@ -51,6 +57,12 @@ func BuildSystemPrompt(agentID, role, workspaceDir, customInstructions string) s
 	if strings.TrimSpace(customInstructions) != "" {
 		sb.WriteString("\nAdditional Instructions:\n")
 		sb.WriteString(strings.TrimSpace(customInstructions))
+		sb.WriteString("\n")
+	}
+
+	if task != nil && !task.IsEmpty() {
+		sb.WriteString("\n")
+		sb.WriteString(FormatPinnedGoal(task))
 		sb.WriteString("\n")
 	}
 
@@ -126,8 +138,18 @@ func TruncateToolOutput(content string, maxLength int) string {
 	return content[:half] + "\n... [content truncated to fit context budget] ...\n" + content[len(content)-half:]
 }
 
+// PinnedTaskDirectivePrefix is the marker prefix identifying pinned goal directives.
+const PinnedTaskDirectivePrefix = "=== ACTIVE TASK DIRECTIVE (PINNED GOAL) ==="
+
+// isPinnedTaskDirective checks if a message contains the active pinned task directive anchor.
+func isPinnedTaskDirective(msg ChatMessage) bool {
+	return strings.Contains(msg.Content, PinnedTaskDirectivePrefix)
+}
+
 // CompactHistory prunes conversation history while preserving the system prompt
-// and keeping tool call / tool response message pairs structurally valid.
+// and pinned task directives, while keeping tool call / tool response message pairs structurally valid.
+// In the event of aggressive compaction, the system prompt and any pinned goal anchor messages
+// are strictly preserved so cognitive drift is prevented.
 func CompactHistory(history []ChatMessage, maxTurns int) []ChatMessage {
 	if maxTurns <= 0 {
 		maxTurns = DefaultMaxTurns
@@ -154,35 +176,49 @@ func CompactHistory(history []ChatMessage, maxTurns int) []ChatMessage {
 		nonSystemMsgs = history[1:]
 	}
 
-	targetNonSystem := maxTurns
-	if hasSystem {
-		targetNonSystem = maxTurns - 1
-	}
-
-	if len(nonSystemMsgs) <= targetNonSystem {
-		if hasSystem {
-			return append([]ChatMessage{systemMsg}, nonSystemMsgs...)
+	// Check if there are pinned task directive messages among non-system messages
+	// (e.g. injected as a user or assistant directive anchor)
+	var pinnedNonSystem []ChatMessage
+	var standardNonSystem []ChatMessage
+	for _, msg := range nonSystemMsgs {
+		if isPinnedTaskDirective(msg) {
+			pinnedNonSystem = append(pinnedNonSystem, msg)
+		} else {
+			standardNonSystem = append(standardNonSystem, msg)
 		}
-		return nonSystemMsgs
 	}
 
-	// Prune from start of nonSystemMsgs until we reach targetNonSystem.
-	// We must ensure we do not orphan a "tool" message whose assistant "tool_calls" message was dropped.
-	startIdx := len(nonSystemMsgs) - targetNonSystem
-
-	// Advance startIdx if it lands on a "tool" message, until we find a "user" or "assistant" boundary.
-	for startIdx < len(nonSystemMsgs) && nonSystemMsgs[startIdx].Role == "tool" {
-		startIdx++
+	targetStandard := maxTurns
+	if hasSystem {
+		targetStandard--
+	}
+	targetStandard -= len(pinnedNonSystem)
+	if targetStandard < 1 && len(standardNonSystem) > 0 {
+		targetStandard = 1
 	}
 
-	pruned := nonSystemMsgs[startIdx:]
+	var retainedStandard []ChatMessage
+	if len(standardNonSystem) <= targetStandard {
+		retainedStandard = standardNonSystem
+	} else {
+		// Prune from start of standardNonSystem until we reach targetStandard.
+		// We must ensure we do not orphan a "tool" message whose assistant "tool_calls" message was dropped.
+		startIdx := len(standardNonSystem) - targetStandard
 
-	// Truncate tool outputs in retained messages
-	result := make([]ChatMessage, 0, len(pruned)+1)
+		// Advance startIdx if it lands on a "tool" message, until we find a "user" or "assistant" boundary.
+		for startIdx < len(standardNonSystem) && standardNonSystem[startIdx].Role == "tool" {
+			startIdx++
+		}
+		retainedStandard = standardNonSystem[startIdx:]
+	}
+
+	// Construct result: system prompt + pinned directives + retained standard turns
+	result := make([]ChatMessage, 0, 1+len(pinnedNonSystem)+len(retainedStandard))
 	if hasSystem {
 		result = append(result, systemMsg)
 	}
-	for _, msg := range pruned {
+	result = append(result, pinnedNonSystem...)
+	for _, msg := range retainedStandard {
 		if msg.Role == "tool" {
 			msg.Content = TruncateToolOutput(msg.Content, MaxToolOutputLength)
 		}
