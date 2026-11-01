@@ -466,8 +466,10 @@ func (e *REPLEngine) executeTurn(ctx context.Context, bus *runtime.EventBus, sta
 			}
 		}
 
-		// Prepare LLM request
-		msgs := CompactHistory(e.GetHistory(), maxTurns)
+		// Prepare LLM request with historical observation pruning and history compaction
+		history := e.GetHistory()
+		history = PruneHistoricalObservations(history, DefaultKeepRecentTurns, DefaultObservationPruneThreshold)
+		msgs := CompactHistory(history, maxTurns)
 		var openAITools []map[string]any
 		if e.registry != nil {
 			openAITools = e.registry.ToOpenAITools()
