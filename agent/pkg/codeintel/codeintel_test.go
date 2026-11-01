@@ -485,12 +485,15 @@ func TestRegistry_RoutingAndFallbacks(t *testing.T) {
 }
 
 func TestConfig_LoadingAndDefaults(t *testing.T) {
-	// 1. NewDefaultRegistry has both drivers
+	// 1. NewDefaultRegistry has native-go, polyglot-ast, and universal-fallback drivers
 	defReg := NewDefaultRegistry()
 	if p, ok := defReg.GetProvider("test.go"); !ok || p.Name() != "native-go" {
 		t.Errorf("expected native-go in default registry")
 	}
-	if p, ok := defReg.GetProvider("test.py"); !ok || p.Name() != "universal-fallback" {
+	if p, ok := defReg.GetProvider("test.py"); !ok || p.Name() != "polyglot-ast" {
+		t.Errorf("expected polyglot-ast for .py in default registry")
+	}
+	if p, ok := defReg.GetProvider("test.unknown"); !ok || p.Name() != "universal-fallback" {
 		t.Errorf("expected universal-fallback in default registry")
 	}
 

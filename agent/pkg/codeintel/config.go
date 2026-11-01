@@ -19,11 +19,12 @@ type Config struct {
 	Disabled        []string          `json:"disabled,omitempty"`  // driver names to disable
 }
 
-// NewDefaultRegistry instantiates a Registry pre-populated with NativeGoDriver
-// and UniversalFallbackDriver.
+// NewDefaultRegistry instantiates a Registry pre-populated with NativeGoDriver,
+// PolyglotDriver, and UniversalFallbackDriver.
 func NewDefaultRegistry() *Registry {
 	reg := NewRegistry()
 	reg.Register(NewNativeGoDriver())
+	reg.Register(NewPolyglotDriver())
 	reg.Register(NewUniversalFallbackDriver())
 	return reg
 }
@@ -60,6 +61,9 @@ func LoadRegistry(workspaceDir string) (*Registry, error) {
 		filteredReg := NewRegistry()
 		if !disabledSet["native-go"] {
 			filteredReg.Register(NewNativeGoDriver())
+		}
+		if !disabledSet["polyglot-ast"] {
+			filteredReg.Register(NewPolyglotDriver())
 		}
 		if !disabledSet["universal-fallback"] {
 			filteredReg.Register(NewUniversalFallbackDriver())

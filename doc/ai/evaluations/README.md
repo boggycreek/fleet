@@ -17,6 +17,7 @@ This directory contains empirical research spikes, benchmark reports, and explor
 | **[NVIDIA OpenShell Evaluation](nvidia-openshell-evaluation.md)** | Sandboxing | Comparative analysis of NVIDIA OpenShell container sandboxing vs. Podman rootless isolation. |
 | **[OpenClaw Concurrency Patterns](openclaw-concurrency-patterns.md)** | Agent Concurrency | Concurrency patterns, worker pools, queue management, and async agent event loops. |
 | **[Thinking Machines Inkling Evaluation](thinking-machines-inkling-evaluation.md)** | Reasoning Control | Controllable reasoning budget integration (0.20–0.99) mapped dynamically from Beads task priority. |
+| **[Tree-sitter AST Evaluation](tree-sitter-ast-evaluation.md)** | Code Intelligence & AST | Architectural evaluation of Cgo, WebAssembly (wazero), and pure-Go parser strategies for polyglot AST outlines under static binary constraints (ADR 00001). |
 | **[Valkey Pub/Sub Evaluation](valkey-pubsub-evaluation.md)** | Messaging Bus | Comparative evaluation of Valkey Pub/Sub vs. Valkey Streams for cross-agent signaling. |
 | **[Valkey Stream Guard Evaluation](valkey-stream-guard-evaluation.md)** | Stream Security | Security evaluation of Valkey stream consumer groups and ACL enforcement. |
 
