@@ -427,6 +427,10 @@ func handleSay(ctx context.Context, cfg libbp.ClientConfig, args []string, stdin
 		return 1
 	}
 
+	if pingErr := client.PublishPing(ctx, libbp.PingChannel); pingErr != nil {
+		fmt.Fprintf(stderr, "bp: warning: failed publishing wakeup ping: %v\n", pingErr)
+	}
+
 	fmt.Fprintf(stdout, "[%s] %s\n", msg.Citation, msg.Content)
 	return 0
 }
@@ -571,6 +575,10 @@ func handleTell(ctx context.Context, cfg libbp.ClientConfig, args []string, stdi
 		return 1
 	}
 
+	if pingErr := client.PublishPing(ctx, recipient); pingErr != nil {
+		fmt.Fprintf(stderr, "bp: warning: failed publishing wakeup ping: %v\n", pingErr)
+	}
+
 	fmt.Fprintf(stdout, "[%s -> %s] %s\n", msg.Citation, recipient, msg.Content)
 	if msg.BlobPath != "" {
 		fmt.Fprintf(stdout, "  └── Payload attached: %s\n", msg.BlobPath)
@@ -597,6 +605,10 @@ func handleReply(ctx context.Context, cfg libbp.ClientConfig, args []string, std
 	if err != nil {
 		fmt.Fprintf(stderr, "bp error: %v\n", err)
 		return 1
+	}
+
+	if pingErr := client.PublishPing(ctx, recipient); pingErr != nil {
+		fmt.Fprintf(stderr, "bp: warning: failed publishing wakeup ping: %v\n", pingErr)
 	}
 
 	fmt.Fprintf(stdout, "[%s -> %s (re: %s)] %s\n", msg.Citation, recipient, msgID, msg.Content)

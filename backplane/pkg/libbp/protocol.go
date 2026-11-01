@@ -57,6 +57,9 @@ func IdentityKey(id string) string { return fmt.Sprintf("identity:%s", strings.T
 func SpecialtyKey(domain string) string {
 	return fmt.Sprintf("specialty:%s", strings.ToLower(strings.TrimSpace(domain)))
 }
+// PingChannel is the well-known Pub/Sub notification recipient handle for broadcast fleet messages
+const PingChannel = "broadcast"
+
 func PingKey(recipient string) string {
 	return fmt.Sprintf("ping:%s", strings.ToLower(strings.TrimSpace(recipient)))
 }
