@@ -578,3 +578,29 @@ func TestFormatOutlineMarkdown_EdgeCases(t *testing.T) {
 		t.Errorf("expected doc comment in output: %s", out)
 	}
 }
+
+func TestNativeGoDriver_ExtraCoverage(t *testing.T) {
+	driver := NewNativeGoDriver()
+	ctx := context.Background()
+
+	// 1. ValidateSyntax with parser error fallback (non-scanner)
+	diags, err := driver.ValidateSyntax(ctx, "test.go", []byte("package main\nvar x = 1 2\n"))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(diags) == 0 {
+		t.Error("expected diags for parser error")
+	}
+
+	// 2. FindDefinition on GenDecl type spec
+	tmpDir := t.TempDir()
+	fPath := filepath.Join(tmpDir, "type.go")
+	_ = os.WriteFile(fPath, []byte("package main\ntype MyStruct struct{}\nfunc Run(s MyStruct) {}\n"), 0644)
+	locs, err := driver.FindDefinition(ctx, fPath, 3, 12) // MyStruct parameter
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(locs) == 0 {
+		t.Error("expected to find definition of MyStruct")
+	}
+}
