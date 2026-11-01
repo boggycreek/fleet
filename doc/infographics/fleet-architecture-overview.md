@@ -70,17 +70,17 @@ flowchart TB
 Fleet packages its containerized runtime as an immutable, composable OCI hierarchy built on rootless Podman (ADR 00006 and ADR 00043):
 
 ```mermaid
-flowchart TD
+flowchart BT
     BaseImage["1. OS Base Layer (Debian Bookworm Minimal) - Non-root user (UID 1000), SSH daemon (2222)"]
     ToolBase["2. Tool Base Layer - Go 1.27, GCC, Make, Node.js/NVM, Deno, Git, ripgrep"]
     DaemonBase["3. Daemon and Supervisor Layer - bpd daemon, bp messaging CLI, beads CLI"]
     MCPSuite["4. Model Context Protocol Suite - beads-mcp, forgejo-mcp, memory-mcp, sonar-mcp"]
     EngineLayer["5. Native Cognitive Engine Layer - fleet-agent daemon, REPL engine, AST code intelligence"]
 
-    BaseImage --> ToolBase
-    ToolBase --> DaemonBase
-    DaemonBase --> MCPSuite
-    MCPSuite --> EngineLayer
+    BaseImage -->|Builds On| ToolBase
+    ToolBase -->|Builds On| DaemonBase
+    DaemonBase -->|Builds On| MCPSuite
+    MCPSuite -->|Builds On| EngineLayer
 ```
 
 ---
