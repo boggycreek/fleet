@@ -37,9 +37,12 @@ var safeCommands = map[string]bool{
 	"HSETNX":    true,
 	"SADD":      true,
 	"SREM":      true,
-	"SMEMBERS":  true,
-	"SCARD":     true,
-	"SISMEMBER": true,
+	"SMEMBERS":    true,
+	"SCARD":       true,
+	"SISMEMBER":   true,
+	"PUBLISH":     true,
+	"SUBSCRIBE":   true,
+	"UNSUBSCRIBE": true,
 }
 
 var dangerousCommands = map[string]bool{
@@ -136,6 +139,18 @@ func AssertAllowed(callerID string, cmd string, args ...string) error {
 	}
 
 	switch upperCmd {
+	case "PUBLISH":
+		if len(args) < 1 {
+			return fmt.Errorf("%w: PUBLISH requires a target channel", ErrForbiddenCommand)
+		}
+		caller := strings.ToLower(strings.TrimSpace(callerID))
+		if caller != "admin" && caller != "operator" {
+			targetChannel := strings.ToLower(strings.TrimSpace(args[0]))
+			if !strings.HasPrefix(targetChannel, "ping:") {
+				return fmt.Errorf("%w: agents may only publish to ping:* channels, got %s", ErrForbiddenCommand, targetChannel)
+			}
+		}
+
 	case "XADD":
 		if len(args) < 1 {
 			return fmt.Errorf("%w: XADD requires a target stream key", ErrForbiddenCommand)
