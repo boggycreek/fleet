@@ -39,6 +39,8 @@ type REPLEngine struct {
 	registry           *tools.Registry
 	responder          TurnResponder
 	priorityResolver   TaskPriorityResolver
+	memoryRetriever    MemoryRetriever
+	retrievedMemories  []string
 	pinnedTask         *TaskSnapshot
 	agentID            string
 	humanName          string
@@ -67,6 +69,32 @@ func NewREPLEngine(llm *LLMClient, registry *tools.Registry, workspaceDir, role 
 		history:           make([]ChatMessage, 0),
 		inboundQueue:      make([]runtime.Event, 0),
 	}
+}
+
+// SetMemoryRetriever configures the episodic memory retriever for dynamic prompt injection.
+func (e *REPLEngine) SetMemoryRetriever(r MemoryRetriever) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.memoryRetriever = r
+}
+
+// MemoryRetriever returns the configured MemoryRetriever.
+func (e *REPLEngine) MemoryRetriever() MemoryRetriever {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.memoryRetriever
+}
+
+// GetRetrievedMemories returns a copy of the currently cached episodic memories.
+func (e *REPLEngine) GetRetrievedMemories() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.retrievedMemories == nil {
+		return nil
+	}
+	cp := make([]string, len(e.retrievedMemories))
+	copy(cp, e.retrievedMemories)
+	return cp
 }
 
 // SetPriorityResolver configures the task priority resolver for dynamic reasoning budget.
@@ -244,11 +272,32 @@ func (e *REPLEngine) SetMaxToolIterations(n int) {
 
 // SetPinnedTask configures or refreshes the active task snapshot directive.
 // If an active session is already initialized with a system prompt at index 0,
-// the system prompt is automatically refreshed to reflect the updated pinned goal.
+// the system prompt is automatically refreshed to reflect the updated pinned goal
+// and any relevant episodic memories retrieved for the active task.
 func (e *REPLEngine) SetPinnedTask(task *TaskSnapshot) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.pinnedTask = task.Clone()
+	retriever := e.memoryRetriever
+	e.mu.Unlock()
+
+	var memories []string
+	if retriever != nil && task != nil && (task.Title != "" || task.Description != "") {
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultMemoryRetrievalTimeout)
+		query := strings.TrimSpace(task.Title)
+		if query == "" {
+			query = strings.TrimSpace(task.Description)
+		}
+		memories, _ = retriever.SearchMemories(ctx, query, DefaultMemoryRetrievalLimit)
+		cancel()
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(memories) > 0 {
+		e.retrievedMemories = memories
+	} else if retriever != nil {
+		e.retrievedMemories = nil
+	}
 
 	// Update existing system prompt if present in history
 	if len(e.history) > 0 && e.history[0].Role == "system" {
@@ -256,7 +305,7 @@ func (e *REPLEngine) SetPinnedTask(task *TaskSnapshot) {
 		if agentID == "" {
 			agentID = "fleet-agent"
 		}
-		e.history[0].Content = BuildSystemPromptWithGoal(agentID, e.role, e.workspaceDir, e.customInstructions, e.pinnedTask)
+		e.history[0].Content = BuildSystemPromptWithGoalAndMemories(agentID, e.role, e.workspaceDir, e.customInstructions, e.pinnedTask, e.retrievedMemories)
 	}
 }
 
@@ -325,7 +374,7 @@ func (e *REPLEngine) Start(ctx context.Context, bus *runtime.EventBus, state *ru
 	}
 	// Initialize history with foundational system prompt if missing
 	if len(e.history) == 0 || e.history[0].Role != "system" {
-		sysPrompt := BuildSystemPromptWithGoal(agentID, e.role, e.workspaceDir, e.customInstructions, e.pinnedTask)
+		sysPrompt := BuildSystemPromptWithGoalAndMemories(agentID, e.role, e.workspaceDir, e.customInstructions, e.pinnedTask, e.retrievedMemories)
 		e.history = append([]ChatMessage{{
 			Role:    "system",
 			Content: sysPrompt,
@@ -432,12 +481,76 @@ func (e *REPLEngine) getPollInterval() time.Duration {
 	return e.pollInterval
 }
 
+// queryEpisodicMemories retrieves relevant episodic memories for the current cognitive context.
+// It gracefully degrades, returning nil if no retriever is configured, queries fail or timeout, or no results exist.
+func (e *REPLEngine) queryEpisodicMemories(ctx context.Context) []string {
+	e.mu.RLock()
+	retriever := e.memoryRetriever
+	task := e.pinnedTask
+	e.mu.RUnlock()
+
+	if retriever == nil {
+		return nil
+	}
+
+	query := ""
+	if task != nil {
+		query = strings.TrimSpace(task.Title)
+		if query == "" {
+			query = strings.TrimSpace(task.Description)
+		}
+	}
+	if query == "" {
+		e.mu.RLock()
+		for i := len(e.history) - 1; i >= 0; i-- {
+			if e.history[i].Role == "user" && !isPinnedTaskDirective(e.history[i]) {
+				query = strings.TrimSpace(e.history[i].Content)
+				break
+			}
+		}
+		e.mu.RUnlock()
+	}
+
+	if query == "" {
+		return nil
+	}
+
+	qCtx, cancel := context.WithTimeout(ctx, DefaultMemoryRetrievalTimeout)
+	defer cancel()
+
+	results, err := retriever.SearchMemories(qCtx, query, DefaultMemoryRetrievalLimit)
+	if err != nil || len(results) == 0 {
+		return nil
+	}
+
+	var valid []string
+	for _, r := range results {
+		if trimmed := strings.TrimSpace(r); trimmed != "" {
+			valid = append(valid, trimmed)
+		}
+	}
+	return valid
+}
+
 // executeTurn executes a multi-turn LLM reasoning and tool execution sequence.
 func (e *REPLEngine) executeTurn(ctx context.Context, bus *runtime.EventBus, state *runtime.SharedState) error {
 	_ = state.Update(func(s *runtime.AgentState) {
 		s.Status = "thinking"
 		s.CurrentActivity = "Reasoning..."
 	})
+
+	// Refresh dynamic episodic memories if retriever is available
+	memories := e.queryEpisodicMemories(ctx)
+	e.mu.Lock()
+	e.retrievedMemories = memories
+	if len(e.history) > 0 && e.history[0].Role == "system" {
+		agentID := e.agentID
+		if agentID == "" {
+			agentID = "fleet-agent"
+		}
+		e.history[0].Content = BuildSystemPromptWithGoalAndMemories(agentID, e.role, e.workspaceDir, e.customInstructions, e.pinnedTask, e.retrievedMemories)
+	}
+	e.mu.Unlock()
 
 	e.mu.RLock()
 	maxIterations := e.maxToolIterations

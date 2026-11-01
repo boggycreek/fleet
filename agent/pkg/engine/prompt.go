@@ -24,12 +24,22 @@ const (
 
 // BuildSystemPrompt constructs the foundational system instruction prompt for the agent.
 func BuildSystemPrompt(agentID, role, workspaceDir, customInstructions string) string {
-	return BuildSystemPromptWithGoal(agentID, role, workspaceDir, customInstructions, nil)
+	return BuildSystemPromptWithGoalAndMemories(agentID, role, workspaceDir, customInstructions, nil, nil)
 }
 
 // BuildSystemPromptWithGoal constructs the foundational system instruction prompt for the agent,
-// injecting a pinned active task goal directive if provided.
-func BuildSystemPromptWithGoal(agentID, role, workspaceDir, customInstructions string, task *TaskSnapshot) string {
+// injecting a pinned active task goal directive and optional episodic memories if provided.
+func BuildSystemPromptWithGoal(agentID, role, workspaceDir, customInstructions string, task *TaskSnapshot, optionalMemories ...[]string) string {
+	var memories []string
+	if len(optionalMemories) > 0 {
+		memories = optionalMemories[0]
+	}
+	return BuildSystemPromptWithGoalAndMemories(agentID, role, workspaceDir, customInstructions, task, memories)
+}
+
+// BuildSystemPromptWithGoalAndMemories constructs the foundational system instruction prompt for the agent,
+// injecting a pinned active task goal directive and relevant episodic memories if provided.
+func BuildSystemPromptWithGoalAndMemories(agentID, role, workspaceDir, customInstructions string, task *TaskSnapshot, memories []string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("You are %s, an autonomous AI software engineering agent running inside an isolated sandbox.\n", agentID))
 	if role != "" {
@@ -63,6 +73,12 @@ func BuildSystemPromptWithGoal(agentID, role, workspaceDir, customInstructions s
 	if task != nil && !task.IsEmpty() {
 		sb.WriteString("\n")
 		sb.WriteString(FormatPinnedGoal(task))
+		sb.WriteString("\n")
+	}
+
+	if formattedMemories := FormatEpisodicMemories(memories); formattedMemories != "" {
+		sb.WriteString("\n")
+		sb.WriteString(formattedMemories)
 		sb.WriteString("\n")
 	}
 
@@ -141,9 +157,10 @@ func TruncateToolOutput(content string, maxLength int) string {
 // PinnedTaskDirectivePrefix is the marker prefix identifying pinned goal directives.
 const PinnedTaskDirectivePrefix = "=== ACTIVE TASK DIRECTIVE (PINNED GOAL) ==="
 
-// isPinnedTaskDirective checks if a message contains the active pinned task directive anchor.
+// isPinnedTaskDirective checks if a message contains the active pinned task directive anchor
+// or episodic memories directive anchor.
 func isPinnedTaskDirective(msg ChatMessage) bool {
-	return strings.Contains(msg.Content, PinnedTaskDirectivePrefix)
+	return strings.Contains(msg.Content, PinnedTaskDirectivePrefix) || strings.Contains(msg.Content, EpisodicMemoriesDirectivePrefix)
 }
 
 // CompactHistory prunes conversation history while preserving the system prompt
