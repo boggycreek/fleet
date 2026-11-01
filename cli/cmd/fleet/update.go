@@ -151,7 +151,7 @@ func installOrBuildBinaries(ctx context.Context, repoDir, binDir string, stdout,
 	cleanEnv := sanitizeGoEnv(os.Environ())
 
 	binarySrcMap := map[string]string{
-		"fleet":     "./sandbox/cmd/fleet",
+		"fleet":     "./cli/cmd/fleet",
 		"bp":        "./backplane/cmd/bp",
 		"bpd":       "./backplane/cmd/bpd",
 		"sonar-mcp": "./mcp/cmd/sonar-mcp",
