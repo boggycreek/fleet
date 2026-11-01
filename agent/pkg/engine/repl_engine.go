@@ -888,7 +888,7 @@ func findBalancedJSON(s string, startIdx int) (string, int) {
 
 func isKnownOrLikelyTool(name string) bool {
 	switch name {
-	case "bash", "write_file", "read_file", "edit_file", "list_dir", "grep_search",
+	case "bash", "write_file", "read_file", "edit_file", "list_dir", "grep_search", "get_outline",
 		"fleet_send_message", "fleet_broadcast", "fleet_read_inbox", "fleet_list_peers",
 		"bd_ready", "bd_list", "bd_show", "bd_create", "bd_claim", "bd_close", "bd_update", "bd_sync",
 		"forge_list_tasks", "forge_create_task", "forge_create_pull_request", "forge_review_pull_request", "forge_get_file":

@@ -9,6 +9,7 @@ This directory contains technical specifications, architectural designs, and sub
 | Specification | Description | Skill Tag |
 | :--- | :--- | :--- |
 | **[Architecture & Runtime](architecture.md)** | Podman container runtime, security perimeter, layered OCI hierarchy, and LLM gateway. | `fleet-architecture` |
+| **[Code Intelligence & AST Architecture](code-intelligence-spec.md)** | 3-Tier Code Intelligence Plugin API, Driver Registry, syntax pre-validation gate, and get_outline tool. | `fleet-code-intelligence-spec` |
 | **[Memory Subsystem Specification](memory-subsystem-spec.md)** | BM25 lexical indexing, frontmatter schemas, and memory consolidation pipelines. | `fleet-memory-subsystem-spec` |
 | **[Podman Pod Co-Location Architecture](podman-pod-colocation.md)** | Dedicated Podman pods per agent instance, localhost IPC, and network namespaces. | `fleet-podman-pod-colocation` |
 | **[VS Code Extension Design](vscode-extension-design.md)** | Architecture and UX design guide for Fleet VS Code extension with Remote-SSH attach. | `fleet-vscode-extension-design` |

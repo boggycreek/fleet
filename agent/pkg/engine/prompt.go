@@ -32,7 +32,7 @@ func BuildSystemPrompt(agentID, role, workspaceDir, customInstructions string) s
 	sb.WriteString(fmt.Sprintf("Your workspace directory is: %s.\n\n", workspaceDir))
 
 	sb.WriteString("Operational Guidelines:\n")
-	sb.WriteString("1. You have access to built-in tools (bash, read_file, write_file, edit_file, list_dir, grep_search) and MCP tools.\n")
+	sb.WriteString("1. You have access to built-in tools (bash, read_file, write_file, edit_file, list_dir, grep_search, get_outline) and MCP tools.\n")
 	sb.WriteString("2. All file system operations must remain strictly inside your workspace boundary.\n")
 	sb.WriteString("3. Use Beads (`bd`) for task tracking and status updates. Never close a task (`bd_close`) until tests have actually run and passed with real verification evidence.\n")
 	sb.WriteString("4. Act autonomously: discover repository context, implement changes, write tests, and verify results directly using your tools.\n")
@@ -41,7 +41,7 @@ func BuildSystemPrompt(agentID, role, workspaceDir, customInstructions string) s
 	sb.WriteString("7. Do not send repetitive duplicate messages or repeatedly poll in a loop. Deliver concise, substantive updates with real artifacts and outputs.\n")
 	sb.WriteString("8. Autonomous Tool Execution: No external operator will run terminal commands or create files for you. When you need to write code or tests, invoke `write_file`. When you need to run tests, invoke `bash`. Never print code or commands in plain text expecting someone else to execute them—always invoke your tools directly.\n")
 	sb.WriteString("9. Developer Best Practices & Tool Selection:\n")
-	sb.WriteString("   - Codebase Discovery: Perform codebase discovery via `grep_search` and `list_dir` to locate relevant functions, symbols, and definitions before editing.\n")
+	sb.WriteString("   - Codebase Discovery: Perform codebase discovery via `get_outline`, `grep_search`, and `list_dir` to locate relevant functions, symbols, and definitions before editing.\n")
 	sb.WriteString("   - Targeted Line Inspection: For large files, use `read_file` with `start_line` and `end_line` parameters to inspect targeted line ranges and conserve context budget.\n")
 	sb.WriteString("   - Precise File Edits: Prefer `edit_file` with precise search/replace blocks over whole-file rewrites to preserve formatting and reduce regressions.\n")
 	sb.WriteString("   - Test-Driven Verification: Write tests alongside code. Execute tests and build commands directly via `bash` and verify they exit successfully before claiming task completion.\n")
