@@ -137,6 +137,8 @@ func startMockValkeyForBp(t *testing.T) (*mockValkeyForBp, int) {
 						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeArray, Array: arr})
 					case "XADD":
 						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, Str: "1700000000000-0"})
+					case "PUBLISH":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeInteger, Num: 1})
 					case "XREVRANGE":
 						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
 							{Type: libbpResp.TypeArray, Array: []libbpResp.Value{
@@ -1742,6 +1744,111 @@ func startRejectingServer(t *testing.T) (int, func()) {
 		}
 	}()
 	return ln.Addr().(*net.TCPAddr).Port, func() { _ = ln.Close() }
+}
+
+func TestBPPubSubPingNotifications(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer ln.Close()
+
+	var mu sync.Mutex
+	var publishedChannels []string
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := libbpResp.NewReader(c)
+				w := libbpResp.NewWriter(c)
+				for {
+					val, err := r.ReadValue()
+					if err != nil {
+						return
+					}
+					args, err := val.AsArray()
+					if err != nil || len(args) == 0 {
+						continue
+					}
+					cmd := strings.ToUpper(args[0].String())
+					mu.Lock()
+					switch cmd {
+					case "AUTH":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeSimpleString, Str: "OK"})
+					case "PING":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeSimpleString, Str: "PONG"})
+					case "INCR":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeInteger, Num: 1})
+					case "XADD":
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeBulkString, Str: "1700000000000-0"})
+					case "PUBLISH":
+						if len(args) > 1 {
+							publishedChannels = append(publishedChannels, args[1].String())
+						}
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeInteger, Num: 1})
+					default:
+						_ = w.WriteValue(libbpResp.Value{Type: libbpResp.TypeSimpleString, Str: "OK"})
+					}
+					mu.Unlock()
+				}
+			}(conn)
+		}
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	cfg := libbp.ClientConfig{
+		Host:    "127.0.0.1",
+		Port:    port,
+		AgentID: "test-sender",
+	}
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	// 1. Say should publish to ping:public
+	code := handleSay(ctx, cfg, []string{"broadcast alert"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("handleSay failed: %s", stderr.String())
+	}
+
+	// 2. Tell should publish to ping:agent-bob
+	stdout.Reset()
+	stderr.Reset()
+	code = handleTell(ctx, cfg, []string{"agent-bob", "direct directive"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("handleTell failed: %s", stderr.String())
+	}
+
+	// 3. Reply should publish to ping:agent-charlie
+	stdout.Reset()
+	stderr.Reset()
+	code = handleReply(ctx, cfg, []string{"1700000000000-0", "agent-charlie", "reply msg"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("handleReply failed: %s", stderr.String())
+	}
+
+	mu.Lock()
+	channels := append([]string{}, publishedChannels...)
+	mu.Unlock()
+
+	expectedChannels := []string{"ping:public", "ping:agent-bob", "ping:agent-charlie"}
+	for _, expected := range expectedChannels {
+		found := false
+		for _, ch := range channels {
+			if strings.EqualFold(ch, expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected publish to channel %s, got channels: %v", expected, channels)
+		}
+	}
 }
 
 
