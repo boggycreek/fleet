@@ -32,6 +32,11 @@ type BackplaneClient interface {
 	Close() error
 }
 
+// PingSubscriber represents backplane operations for push-notification wakeup subscriptions.
+type PingSubscriber interface {
+	SubscribePing(ctx context.Context, channels ...string) (<-chan string, error)
+}
+
 // EnsembleClient represents backplane operations for ensemble channel discovery and message polling.
 type EnsembleClient interface {
 	ListJoinedEnsembles(ctx context.Context) ([]string, error)
@@ -424,9 +429,34 @@ func (d *Daemon) Tick(ctx context.Context, blockSeconds ...int) error {
 	return runErr
 }
 
-// Run executes the daemon loop with blocking stream polling until context is canceled.
+// Run executes the daemon loop with reactive Pub/Sub wakeups and periodic fallback polling until context is canceled.
 func (d *Daemon) Run(ctx context.Context) error {
 	fmt.Fprintf(d.stdout, "[bpd] Starting Backplane Daemon for agent %s\n", d.cfg.AgentName)
+
+	var pingCh <-chan string
+	if subscriber, ok := d.client.(PingSubscriber); ok {
+		pingChannel := libbp.PingKey(d.cfg.AgentName)
+		ch, err := subscriber.SubscribePing(ctx, pingChannel)
+		if err != nil {
+			fmt.Fprintf(d.stderr, "[bpd] Warning: failed subscribing to ping channel %s: %v; falling back to periodic polling\n", pingChannel, err)
+		} else {
+			pingCh = ch
+			fmt.Fprintf(d.stdout, "[bpd] Subscribed to Pub/Sub ping channel %s for reactive wakeup\n", pingChannel)
+		}
+	}
+
+	getInterval := func() int {
+		intervalSecs, err := d.client.GetPollInterval(ctx)
+		if err != nil || intervalSecs < libbp.MinPollInterval || intervalSecs > libbp.MaxPollInterval {
+			return d.cfg.DefaultIntervalSecs
+		}
+		return intervalSecs
+	}
+
+	currentInterval := getInterval()
+	ticker := time.NewTicker(time.Duration(currentInterval) * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -435,19 +465,23 @@ func (d *Daemon) Run(ctx context.Context) error {
 		default:
 		}
 
-		// Read dynamic poll interval
-		intervalSecs, err := d.client.GetPollInterval(ctx)
-		if err != nil || intervalSecs < libbp.MinPollInterval || intervalSecs > libbp.MaxPollInterval {
-			intervalSecs = d.cfg.DefaultIntervalSecs
+		// If attach lock file exists, sleep until next check
+		if _, err := os.Stat(d.cfg.AttachLockFile); err == nil {
+			if err := d.sleeper(ctx, time.Duration(currentInterval)*time.Second); err != nil {
+				if errors.Is(err, context.Canceled) {
+					fmt.Fprintln(d.stdout, "[bpd] Stopping daemon (context canceled)")
+					return nil
+				}
+				return err
+			}
+			continue
 		}
 
-		// Block on Valkey streams with intervalSecs
-		if err := d.Tick(ctx, intervalSecs); err != nil {
+		if err := d.Tick(ctx, 0); err != nil {
 			fmt.Fprintf(d.stderr, "[bpd] Error processing tick: %v\n", err)
-			// Apply backoff sleep on error to prevent busy spinning if server is unreachable
 			backoff := time.Duration(1) * time.Second
-			if intervalSecs > 1 {
-				backoff = time.Duration(intervalSecs) * time.Second
+			if currentInterval > 1 {
+				backoff = time.Duration(currentInterval) * time.Second
 			}
 			if sleepErr := d.sleeper(ctx, backoff); sleepErr != nil {
 				if errors.Is(sleepErr, context.Canceled) {
@@ -459,14 +493,24 @@ func (d *Daemon) Run(ctx context.Context) error {
 			continue
 		}
 
-		// If attach lock file exists, sleep until next check
-		if _, err := os.Stat(d.cfg.AttachLockFile); err == nil {
-			if err := d.sleeper(ctx, time.Duration(intervalSecs)*time.Second); err != nil {
-				if errors.Is(err, context.Canceled) {
-					fmt.Fprintln(d.stdout, "[bpd] Stopping daemon (context canceled)")
-					return nil
-				}
-				return err
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(d.stdout, "[bpd] Stopping daemon (context canceled)")
+			return nil
+
+		case _, ok := <-pingCh:
+			if !ok {
+				fmt.Fprintf(d.stderr, "[bpd] Ping notification channel closed; falling back to periodic ticker\n")
+				pingCh = nil
+			} else {
+				fmt.Fprintf(d.stdout, "[bpd] Reactive Pub/Sub wakeup received; triggering immediate tick\n")
+			}
+
+		case <-ticker.C:
+			newInterval := getInterval()
+			if newInterval != currentInterval {
+				currentInterval = newInterval
+				ticker.Reset(time.Duration(currentInterval) * time.Second)
 			}
 		}
 	}

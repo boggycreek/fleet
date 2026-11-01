@@ -21,6 +21,23 @@ import (
 	"github.com/boggycreek/fleet/backplane/test/harness"
 )
 
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
 type mockBackplaneClient struct {
 	mu           sync.Mutex
 	recvMessages []*libbp.Message
@@ -39,6 +56,20 @@ type mockBackplaneClient struct {
 	ensembleErr     error
 	cursors         map[string]string
 	setCursorCalled map[string]string
+
+	pingCh       chan string
+	pingErr      error
+	subscribeChs []string
+}
+
+func (m *mockBackplaneClient) SubscribePing(ctx context.Context, channels ...string) (<-chan string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.subscribeChs = append(m.subscribeChs, channels...)
+	if m.pingErr != nil {
+		return nil, m.pingErr
+	}
+	return m.pingCh, nil
 }
 
 func (m *mockBackplaneClient) Recv(ctx context.Context, blockSeconds int) ([]*libbp.Message, error) {
@@ -434,6 +465,136 @@ func TestDaemonRunContextCanceled(t *testing.T) {
 
 	if err := d.Run(ctx); err != nil {
 		t.Fatalf("expected nil return on canceled context, got %v", err)
+	}
+}
+
+func TestDaemonRunPubSubReactiveWakeup(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &Config{
+		AgentName:           "reactive-agent",
+		StateDir:            tmpDir,
+		DefaultIntervalSecs: 60,
+		AttachLockFile:      filepath.Join(tmpDir, "lock"),
+		RunnerCmd:           "dummy",
+	}
+
+	pingCh := make(chan string, 10)
+	client := &mockBackplaneClient{
+		pingCh: pingCh,
+	}
+
+	stdout := &safeBuffer{}
+	stderr := &safeBuffer{}
+	d, err := NewDaemon(cfg, client, stdout, stderr)
+	if err != nil {
+		t.Fatalf("NewDaemon failed: %v", err)
+	}
+
+	runnerCalled := make(chan struct{}, 10)
+	d.SetRunner(func(_ context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) error {
+		runnerCalled <- struct{}{}
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- d.Run(ctx)
+	}()
+
+	// 1. Initial drain runs. Wait for it or send a message then ping.
+	time.Sleep(20 * time.Millisecond)
+
+	// Send new message to client and notify via pingCh
+	client.mu.Lock()
+	client.recvMessages = []*libbp.Message{{Citation: "agent#1", Content: "urgent task"}}
+	client.mu.Unlock()
+
+	pingCh <- `{"type":"ping"}`
+
+	select {
+	case <-runnerCalled:
+		// Success: reactive wakeup triggered Tick and runner!
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for reactive wakeup runner execution")
+	}
+
+	// 2. Test ping channel closure fallback to ticker
+	close(pingCh)
+	time.Sleep(20 * time.Millisecond)
+	if !strings.Contains(stderr.String(), "Ping notification channel closed") {
+		t.Errorf("expected warning about ping channel closed, got: %s", stderr.String())
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Errorf("expected nil on cancel, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for daemon to exit on cancel")
+	}
+}
+
+func TestDaemonRunPubSubSubscribeErrorGracefulFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &Config{
+		AgentName:           "fallback-agent",
+		StateDir:            tmpDir,
+		DefaultIntervalSecs: 1,
+		AttachLockFile:      filepath.Join(tmpDir, "lock"),
+		RunnerCmd:           "dummy",
+	}
+
+	client := &mockBackplaneClient{
+		pingErr: errors.New("valkey pubsub auth failure"),
+	}
+
+	stdout := &safeBuffer{}
+	stderr := &safeBuffer{}
+	d, _ := NewDaemon(cfg, client, stdout, stderr)
+
+	runnerCalled := make(chan struct{}, 10)
+	d.SetRunner(func(_ context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) error {
+		runnerCalled <- struct{}{}
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- d.Run(ctx)
+	}()
+
+	// Fallback ticker should tick every 1s
+	client.mu.Lock()
+	client.recvMessages = []*libbp.Message{{Citation: "peer#1", Content: "periodic task"}}
+	client.mu.Unlock()
+
+	select {
+	case <-runnerCalled:
+		// Succeeded via initial tick or fallback ticker!
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for fallback periodic execution")
+	}
+
+	if !strings.Contains(stderr.String(), "Warning: failed subscribing to ping channel") {
+		t.Errorf("expected subscription warning in stderr, got: %s", stderr.String())
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Errorf("expected nil on cancel, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for daemon exit")
 	}
 }
 
