@@ -427,6 +427,9 @@ func handleSay(ctx context.Context, cfg libbp.ClientConfig, args []string, stdin
 		return 1
 	}
 
+	// Fire lightweight Pub/Sub wakeup ping to broadcast channel (best-effort & non-fatal)
+	_ = client.PublishPing(ctx, libbp.PingChannel)
+
 	fmt.Fprintf(stdout, "[%s] %s\n", msg.Citation, msg.Content)
 	return 0
 }
@@ -498,6 +501,9 @@ func handlePost(ctx context.Context, cfg libbp.ClientConfig, args []string, stdi
 	target := "fleet"
 	if recipient != "" {
 		target = recipient
+		_ = client.PublishPing(ctx, recipient)
+	} else {
+		_ = client.PublishPing(ctx, libbp.PingChannel)
 	}
 	fmt.Fprintf(stdout, "[%s -> %s] %s\n", msg.Citation, target, msg.Content)
 	if msg.BlobPath != "" {
@@ -571,6 +577,9 @@ func handleTell(ctx context.Context, cfg libbp.ClientConfig, args []string, stdi
 		return 1
 	}
 
+	// Fire lightweight Pub/Sub wakeup ping to recipient (best-effort & non-fatal)
+	_ = client.PublishPing(ctx, recipient)
+
 	fmt.Fprintf(stdout, "[%s -> %s] %s\n", msg.Citation, recipient, msg.Content)
 	if msg.BlobPath != "" {
 		fmt.Fprintf(stdout, "  └── Payload attached: %s\n", msg.BlobPath)
@@ -598,6 +607,9 @@ func handleReply(ctx context.Context, cfg libbp.ClientConfig, args []string, std
 		fmt.Fprintf(stderr, "bp error: %v\n", err)
 		return 1
 	}
+
+	// Fire lightweight Pub/Sub wakeup ping to recipient (best-effort & non-fatal)
+	_ = client.PublishPing(ctx, recipient)
 
 	fmt.Fprintf(stdout, "[%s -> %s (re: %s)] %s\n", msg.Citation, recipient, msgID, msg.Content)
 	return 0
