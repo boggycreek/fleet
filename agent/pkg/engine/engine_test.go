@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1747,4 +1748,366 @@ func TestChatCompletionRequest_ReasoningFieldsJSON(t *testing.T) {
 	if _, exists := rawEmpty["reasoning_effort"]; exists {
 		t.Error("expected reasoning_effort to be omitted when empty")
 	}
+}
+
+// --- Observation Pruning Tests ---
+
+func TestPruneHistoricalObservations_NilAndEmpty(t *testing.T) {
+	if got := PruneHistoricalObservations(nil, 1, 500); got != nil {
+		t.Errorf("expected nil for nil input, got %+v", got)
+	}
+	if got := PruneHistoricalObservations([]ChatMessage{}, 1, 500); got != nil {
+		t.Errorf("expected nil for empty slice, got %+v", got)
+	}
+	// Defaults when non-positive
+	msgs := []ChatMessage{
+		{Role: "user", Content: "hi"},
+		{Role: "tool", ToolCallID: "c1", Name: "bash", Content: strings.Repeat("log trace\n", 25)},
+		{Role: "assistant", Content: "step 1"},
+		{Role: "user", Content: "next"},
+		{Role: "tool", ToolCallID: "c2", Name: "bash", Content: "recent"},
+	}
+	res := PruneHistoricalObservations(msgs, 0, 0)
+	if !strings.Contains(res[1].Content, "... [pruned ") {
+		t.Errorf("expected default pruning when keepRecentTurns <= 0 and maxChars <= 0")
+	}
+}
+
+func TestPruneHistoricalObservations_PreservesRecentTurns(t *testing.T) {
+	bulkyOutput := strings.Repeat("line of test data with detailed test logs\n", 30)
+
+	msgs := []ChatMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "run test"},
+		{Role: "assistant", Content: "running tool", ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: ToolFunctionCall{Name: "bash"}}}},
+		{Role: "tool", ToolCallID: "c1", Name: "bash", Content: bulkyOutput},
+	}
+
+	// keepRecentTurns = 1, bulkyOutput is the most recent tool output: should NOT be pruned
+	pruned := PruneHistoricalObservations(msgs, 1, 200)
+	if len(pruned) != len(msgs) {
+		t.Fatalf("expected length %d, got %d", len(msgs), len(pruned))
+	}
+	if pruned[3].Content != bulkyOutput {
+		t.Errorf("expected most recent tool output to remain completely untouched")
+	}
+}
+
+func TestPruneHistoricalObservations_PrunesOlderTurnsCleanly(t *testing.T) {
+	// Build a bulky multi-line output with distinct head and tail
+	var sb strings.Builder
+	sb.WriteString("=== RUN TestHeader1\n")
+	sb.WriteString("=== RUN TestHeader2\n")
+	sb.WriteString("=== RUN TestHeader3\n")
+	for i := 4; i <= 25; i++ {
+		sb.WriteString(fmt.Sprintf("intermediate debug trace line %d with bulky data verbose verbose\n", i))
+	}
+	sb.WriteString("--- FAIL: TestHeader3 (0.05s)\n")
+	sb.WriteString("FAIL: exit status 1\n")
+	sb.WriteString("Status: failure\n")
+	historicalBulky := sb.String()
+
+	recentToolOutput := "recent test result: ok\nall tests passed\n"
+
+	msgs := []ChatMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "turn 1: run build"},
+		{Role: "assistant", Content: "invoking compiler", ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: ToolFunctionCall{Name: "bash", Arguments: `{"command":"go test"}`}}}},
+		{Role: "tool", ToolCallID: "c1", Name: "bash", Content: historicalBulky},
+		{Role: "assistant", Content: "Turn 1 finished with error."},
+		{Role: "user", Content: "turn 2: retry build"},
+		{Role: "assistant", Content: "invoking retry", ToolCalls: []ToolCall{{ID: "c2", Type: "function", Function: ToolFunctionCall{Name: "bash", Arguments: `{"command":"go test -v"}`}}}},
+		{Role: "tool", ToolCallID: "c2", Name: "bash", Content: recentToolOutput},
+	}
+
+	pruned := PruneHistoricalObservations(msgs, 1, 300)
+	if len(pruned) != len(msgs) {
+		t.Fatalf("expected %d messages, got %d", len(msgs), len(pruned))
+	}
+
+	// 1. Tool metadata preserved
+	histMsg := pruned[3]
+	if histMsg.Role != "tool" || histMsg.ToolCallID != "c1" || histMsg.Name != "bash" {
+		t.Errorf("tool metadata corrupted: %+v", histMsg)
+	}
+
+	// 2. Omission marker present
+	if !strings.Contains(histMsg.Content, "... [pruned ") || !strings.Contains(histMsg.Content, "lines / ") || !strings.Contains(histMsg.Content, "bytes for context efficiency] ...") {
+		t.Errorf("expected omission marker in pruned content:\n%s", histMsg.Content)
+	}
+
+	// 3. Head lines preserved
+	if !strings.HasPrefix(histMsg.Content, "=== RUN TestHeader1\n=== RUN TestHeader2\n=== RUN TestHeader3\n") {
+		t.Errorf("expected top 3 lines preserved, got:\n%s", histMsg.Content)
+	}
+
+	// 4. Tail lines preserved
+	if !strings.HasSuffix(histMsg.Content, "--- FAIL: TestHeader3 (0.05s)\nFAIL: exit status 1\nStatus: failure\n") {
+		t.Errorf("expected bottom 3 lines preserved, got:\n%s", histMsg.Content)
+	}
+
+	// 5. Recent tool output kept untouched
+	if pruned[7].Content != recentToolOutput {
+		t.Errorf("recent turn tool output modified: %s", pruned[7].Content)
+	}
+}
+
+func TestPruneHistoricalObservations_SmallObservationsUntouched(t *testing.T) {
+	smallOutput := "exit status 0\nall 5 tests passed\n"
+
+	msgs := []ChatMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "turn 1"},
+		{Role: "assistant", Content: "invoking tool"},
+		{Role: "tool", ToolCallID: "c1", Name: "bash", Content: smallOutput},
+		{Role: "assistant", Content: "turn 1 done"},
+		{Role: "user", Content: "turn 2"},
+		{Role: "assistant", Content: "invoking tool 2"},
+		{Role: "tool", ToolCallID: "c2", Name: "bash", Content: "another small output"},
+	}
+
+	// Even though tool c1 is historical, it's well below maxChars (500) and maxLines (15)
+	pruned := PruneHistoricalObservations(msgs, 1, 500)
+	if pruned[3].Content != smallOutput {
+		t.Errorf("expected small historical observation to remain untouched, got: %q", pruned[3].Content)
+	}
+}
+
+func TestPruneHistoricalObservations_MultipleOlderToolBatches(t *testing.T) {
+	bulky1 := strings.Repeat("batch 1 trace line info verbose logs\n", 20)
+	bulky2 := strings.Repeat("batch 2 trace line info verbose logs\n", 20)
+	bulkyRecent := strings.Repeat("recent trace line info verbose logs\n", 20)
+
+	msgs := []ChatMessage{
+		{Role: "user", Content: "batch 1"},
+		{Role: "assistant", Content: "calling 1"},
+		{Role: "tool", ToolCallID: "c1", Name: "tool1", Content: bulky1},
+		{Role: "assistant", Content: "batch 1 done"},
+		{Role: "user", Content: "batch 2"},
+		{Role: "assistant", Content: "calling 2"},
+		{Role: "tool", ToolCallID: "c2", Name: "tool2", Content: bulky2},
+		{Role: "assistant", Content: "batch 2 done"},
+		{Role: "user", Content: "batch 3"},
+		{Role: "assistant", Content: "calling 3"},
+		{Role: "tool", ToolCallID: "c3", Name: "tool3", Content: bulkyRecent},
+	}
+
+	// keepRecentTurns = 2: tool2 and tool3 should be kept intact, while tool1 is pruned
+	pruned := PruneHistoricalObservations(msgs, 2, 200)
+	if !strings.Contains(pruned[2].Content, "... [pruned ") {
+		t.Errorf("expected tool1 to be pruned")
+	}
+	if pruned[6].Content != bulky2 {
+		t.Errorf("expected tool2 to be preserved with keepRecentTurns=2")
+	}
+	if pruned[10].Content != bulkyRecent {
+		t.Errorf("expected tool3 to be preserved with keepRecentTurns=2")
+	}
+}
+
+func TestPruneObservationPayload_EdgeCases(t *testing.T) {
+	// 1. Defaults when <= 0
+	lines100 := strings.Repeat("log entry here\n", 100)
+	prunedDefault := PruneObservationPayload(lines100, 0, 0, 0, 0)
+	if !strings.Contains(prunedDefault, "... [pruned ") {
+		t.Errorf("expected pruning with default params")
+	}
+
+	// 2. Few lines but large character count
+	singleLongLine := strings.Repeat("X", 1000)
+	prunedLong := PruneObservationPayload(singleLongLine, 200, 15, 3, 3)
+	if !strings.Contains(prunedLong, "[content truncated to fit context budget]") {
+		t.Errorf("expected TruncateToolOutput fallback for few lines but large chars, got: %s", prunedLong)
+	}
+
+	// 3. Exact line count == head + tail but character count exceeds threshold
+	sixLines := "line 1\n" + strings.Repeat("A", 100) + "\nline 3\nline 4\nline 5\nline 6"
+	prunedSix := PruneObservationPayload(sixLines, 50, 15, 3, 3)
+	if !strings.Contains(prunedSix, "[content truncated to fit context budget]") {
+		t.Errorf("expected truncation fallback when lineCount <= headLines+tailLines, got: %s", prunedSix)
+	}
+
+	// 4. Content fits within both chars and lines
+	short := "line1\nline2\nline3\n"
+	if got := PruneObservationPayload(short, 500, 15, 3, 3); got != short {
+		t.Errorf("expected short content untouched, got %q", got)
+	}
+}
+
+func TestREPLEngineObservationPruningIntegration(t *testing.T) {
+	var capturedMessages [][]ChatMessage
+	var mu sync.Mutex
+	var callCount int32
+
+	bulkyOutput := strings.Repeat("verbose diagnostic build output line\n", 30)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		step := atomic.AddInt32(&callCount, 1)
+		var req ChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			mu.Lock()
+			capturedMessages = append(capturedMessages, req.Messages)
+			mu.Unlock()
+		}
+
+		var resp ChatCompletionResponse
+		if step == 1 {
+			// First call: execute bulky tool
+			resp = ChatCompletionResponse{
+				ID:    "resp-1",
+				Model: "test-model",
+				Choices: []ChatChoice{
+					{
+						Index: 0,
+						Message: ChatMessage{
+							Role: "assistant",
+							ToolCalls: []ToolCall{
+								{
+									ID:   "call-1",
+									Type: "function",
+									Function: ToolFunctionCall{
+										Name:      "test_bulky_tool",
+										Arguments: "{}",
+									},
+								},
+							},
+						},
+						FinishReason: "tool_calls",
+					},
+				},
+			}
+		} else if step == 2 {
+			// Second call: request another tool call so step 1 tool output becomes historical
+			resp = ChatCompletionResponse{
+				ID:    "resp-2",
+				Model: "test-model",
+				Choices: []ChatChoice{
+					{
+						Index: 0,
+						Message: ChatMessage{
+							Role: "assistant",
+							ToolCalls: []ToolCall{
+								{
+									ID:   "call-2",
+									Type: "function",
+									Function: ToolFunctionCall{
+										Name:      "test_recent_tool",
+										Arguments: "{}",
+									},
+								},
+							},
+						},
+						FinishReason: "tool_calls",
+					},
+				},
+			}
+		} else {
+			// Third call: final conclusion
+			resp = ChatCompletionResponse{
+				ID:    "resp-3",
+				Model: "test-model",
+				Choices: []ChatChoice{
+					{
+						Index: 0,
+						Message: ChatMessage{
+							Role:    "assistant",
+							Content: "All steps completed.",
+						},
+						FinishReason: "stop",
+					},
+				},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	tmpDir := t.TempDir()
+	llm := NewLLMClient(ts.URL, "key", "test-model", 5*time.Second)
+	reg := tools.NewRegistry()
+	_ = reg.Register(mockSimpleTool{name: "test_bulky_tool", output: bulkyOutput})
+	_ = reg.Register(mockSimpleTool{name: "test_recent_tool", output: "recent quick output\n"})
+
+	eng := NewREPLEngine(llm, reg, tmpDir, "coder")
+	eng.SetPollInterval(10 * time.Millisecond)
+
+	bus := runtime.NewEventBus()
+	state := runtime.NewSharedState(filepath.Join(tmpDir, "state.json"), "agent-01")
+
+	eng.AppendMessage(ChatMessage{Role: "user", Content: "Run multi-step test."})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- eng.Start(ctx, bus, state)
+	}()
+
+	for i := 0; i < 60; i++ {
+		time.Sleep(20 * time.Millisecond)
+		if atomic.LoadInt32(&callCount) >= 3 && state.Read().Status == "idle" {
+			break
+		}
+	}
+
+	cancel()
+	_ = <-errChan
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(capturedMessages) < 3 {
+		t.Fatalf("expected at least 3 LLM calls, got %d", len(capturedMessages))
+	}
+
+	// In request 2 (second LLM call): tool 1 output is the immediately preceding output -> preserved in full
+	req2 := capturedMessages[1]
+	var tool1InReq2 *ChatMessage
+	for _, m := range req2 {
+		if m.Role == "tool" && m.ToolCallID == "call-1" {
+			tool1InReq2 = &m
+			break
+		}
+	}
+	if tool1InReq2 == nil {
+		t.Fatal("expected tool-1 message in request 2")
+	}
+	if !strings.Contains(tool1InReq2.Content, "verbose diagnostic build output line") || strings.Contains(tool1InReq2.Content, "... [pruned ") {
+		t.Errorf("expected tool-1 in immediate turn (req2) to be unpruned, got:\n%s", tool1InReq2.Content)
+	}
+
+	// In request 3 (third LLM call): tool 1 output is now historical (older turn) -> PRUNED
+	// tool 2 output is the immediately preceding output -> preserved in full
+	req3 := capturedMessages[2]
+	var tool1InReq3, tool2InReq3 *ChatMessage
+	for _, m := range req3 {
+		if m.Role == "tool" && m.ToolCallID == "call-1" {
+			tool1InReq3 = &m
+		} else if m.Role == "tool" && m.ToolCallID == "call-2" {
+			tool2InReq3 = &m
+		}
+	}
+	if tool1InReq3 == nil || tool2InReq3 == nil {
+		t.Fatal("expected tool-1 and tool-2 messages in request 3")
+	}
+
+	if !strings.Contains(tool1InReq3.Content, "... [pruned ") {
+		t.Errorf("expected tool-1 in older turn (req3) to be pruned, got:\n%s", tool1InReq3.Content)
+	}
+	if tool2InReq3.Content != "recent quick output\n" {
+		t.Errorf("expected tool-2 in immediate turn (req3) to remain intact, got: %s", tool2InReq3.Content)
+	}
+}
+
+type mockSimpleTool struct {
+	name   string
+	output string
+}
+
+func (m mockSimpleTool) Name() string               { return m.name }
+func (m mockSimpleTool) Description() string        { return "test tool" }
+func (m mockSimpleTool) Parameters() map[string]any { return nil }
+func (m mockSimpleTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+	return m.output, nil
 }
