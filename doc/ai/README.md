@@ -36,7 +36,6 @@ Structural blueprints, runtime constraints, and subsystem designs governing the 
 
 ### 3. [Hardware & Inference Evaluations](evaluations/README.md) (`doc/ai/evaluations/`)
 Empirical research spikes, benchmarks, and exploratory evaluations covering local inference engines, models, topologies, and networking:
-- **[128k KV Cache Scaling for Local Inference](evaluations/kv-cache-128k-scaling.md)** (`fleet-kv-cache-128k-scaling`)
 - **[Colibri MoE Inference Evaluation](evaluations/colibri-moe-inference.md)**
 - **[Distributed Inference with Exo](evaluations/distributed-inference-exo.md)**
 - **[FreeBSD Host Support & Runtime Porting Guide](evaluations/freebsd-host-support.md)**
@@ -44,7 +43,6 @@ Empirical research spikes, benchmarks, and exploratory evaluations covering loca
 - **[Multi-Machine Local Network Federation & Gateway DNS](evaluations/multi-machine-network-federation.md)**
 - **[NVIDIA OpenShell Evaluation](evaluations/nvidia-openshell-evaluation.md)**
 - **[OpenClaw Concurrency Patterns](evaluations/openclaw-concurrency-patterns.md)**
-- **[Thinking Machines Inkling Controllable Reasoning](evaluations/thinking-machines-inkling-evaluation.md)**
 - **[Valkey Pub/Sub Evaluation](evaluations/valkey-pubsub-evaluation.md)**
 - **[Valkey Stream Guard Evaluation](evaluations/valkey-stream-guard-evaluation.md)**
 

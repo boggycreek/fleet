@@ -8,7 +8,6 @@ This directory contains empirical research spikes, benchmark reports, and explor
 
 | Evaluation | Focus Area | Key Findings / Outcome |
 | :--- | :--- | :--- |
-| **[128k KV Cache Scaling](kv-cache-128k-scaling.md)** | Inference & VRAM | VRAM modeling for 128k KV cache scaling on 12GB GPUs across Topology A (4x32k) and Topology B (2x64k) (ADR 00055). |
 | **[Colibri MoE Inference](colibri-moe-inference.md)** | Model Architecture | Mixture-of-Experts inference latency, memory footprint, and multi-agent routing trade-offs. |
 | **[Distributed Inference with Exo](distributed-inference-exo.md)** | Distributed Compute | Setup runbook and performance analysis for pooling LAN compute nodes using `exo`. |
 | **[FreeBSD Host Support](freebsd-host-support.md)** | Host OS Compatibility | FreeBSD 14.x/15.x host compatibility, bhyve microVMs, ZFS dataset volumes, and pf.conf anchor networking. |
@@ -16,7 +15,6 @@ This directory contains empirical research spikes, benchmark reports, and explor
 | **[Multi-Machine Network Federation](multi-machine-network-federation.md)** | LAN Networking | Multi-machine local network Fleet deployment, federated backplane relaying, and gateway DNS resolution. |
 | **[NVIDIA OpenShell Evaluation](nvidia-openshell-evaluation.md)** | Sandboxing | Comparative analysis of NVIDIA OpenShell container sandboxing vs. Podman rootless isolation. |
 | **[OpenClaw Concurrency Patterns](openclaw-concurrency-patterns.md)** | Agent Concurrency | Concurrency patterns, worker pools, queue management, and async agent event loops. |
-| **[Thinking Machines Inkling Evaluation](thinking-machines-inkling-evaluation.md)** | Reasoning Control | Controllable reasoning budget integration (0.20–0.99) mapped dynamically from Beads task priority. |
 | **[Valkey Pub/Sub Evaluation](valkey-pubsub-evaluation.md)** | Messaging Bus | Comparative evaluation of Valkey Pub/Sub vs. Valkey Streams for cross-agent signaling. |
 | **[Valkey Stream Guard Evaluation](valkey-stream-guard-evaluation.md)** | Stream Security | Security evaluation of Valkey stream consumer groups and ACL enforcement. |
 
