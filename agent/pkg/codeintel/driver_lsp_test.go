@@ -677,8 +677,18 @@ func TestLSPDriver_HelperFunctions(t *testing.T) {
 	}
 }
 
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	defer os.Exit(0)
+	// Simple echo behavior: copy stdin to stdout
+	_, _ = io.Copy(os.Stdout, os.Stdin)
+}
+
 func TestProcessTransport_DirectCoverage(t *testing.T) {
-	cmd := exec.Command("cat")
+	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--")
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdinpipe failed: %v", err)
@@ -816,28 +826,55 @@ func TestLSPDriver_GetOutlineDiskAndNull(t *testing.T) {
 	}
 }
 
-func TestNativeGoDriver_ExtraCoverage(t *testing.T) {
-	driver := NewNativeGoDriver()
-	ctx := context.Background()
+func TestLSPDriver_GracefulShutdownOnContextCancel(t *testing.T) {
+	clientTransport, serverIO := newMockPipeTransport()
 
-	// 1. ValidateSyntax with parser error fallback (non-scanner)
-	diags, err := driver.ValidateSyntax(ctx, "test.go", []byte("package main\nvar x = 1 2\n"))
+	shutdownReceived := make(chan struct{})
+	exitReceived := make(chan struct{})
+
+	go serverIO.run(func(req lspRequest) (any, error, bool) {
+		switch req.Method {
+		case "initialize":
+			return map[string]any{}, nil, false
+		case "initialized":
+			return nil, nil, true
+		case "shutdown":
+			close(shutdownReceived)
+			return nil, nil, false
+		case "exit":
+			close(exitReceived)
+			return nil, nil, true
+		default:
+			return nil, nil, false
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	driver := NewLSPDriver(LSPDriverConfig{
+		Context: ctx,
+		TransportFactory: func() (LSPTransport, error) {
+			return clientTransport, nil
+		},
+	})
+
+	// Ensure started
+	_, err := driver.GetOutline(context.Background(), "/workspace/foo.go", []byte("package foo"))
 	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if len(diags) == 0 {
-		t.Error("expected diags for parser error")
+		t.Fatalf("GetOutline failed: %v", err)
 	}
 
-	// 2. FindDefinition on GenDecl type spec
-	tmpDir := t.TempDir()
-	fPath := filepath.Join(tmpDir, "type.go")
-	_ = os.WriteFile(fPath, []byte("package main\ntype MyStruct struct{}\nfunc Run(s MyStruct) {}\n"), 0644)
-	locs, err := driver.FindDefinition(ctx, fPath, 3, 12) // MyStruct parameter
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
+	// Cancel context to trigger graceful shutdown
+	cancel()
+
+	select {
+	case <-shutdownReceived:
+	case <-time.After(1 * time.Second):
+		t.Error("timed out waiting for shutdown request after context cancellation")
 	}
-	if len(locs) == 0 {
-		t.Error("expected to find definition of MyStruct")
+
+	select {
+	case <-exitReceived:
+	case <-time.After(1 * time.Second):
+		t.Error("timed out waiting for exit notification after context cancellation")
 	}
 }

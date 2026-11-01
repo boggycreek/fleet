@@ -66,30 +66,34 @@ func (p *processTransport) Close() error {
 
 // LSPDriverConfig defines the configuration parameters for initializing an LSPDriver.
 type LSPDriverConfig struct {
-	Name             string            `json:"name"`
-	Command          string            `json:"command"`
-	Args             []string          `json:"args,omitempty"`
-	Languages        []string          `json:"languages"`
-	RootURI          string            `json:"root_uri,omitempty"`
-	WorkspaceDir     string            `json:"workspace_dir,omitempty"`
-	Initialization   map[string]any    `json:"initialization_options,omitempty"`
+	Name             string                       `json:"name"`
+	Command          string                       `json:"command"`
+	Args             []string                     `json:"args,omitempty"`
+	Languages        []string                     `json:"languages"`
+	RootURI          string                       `json:"root_uri,omitempty"`
+	WorkspaceDir     string                       `json:"workspace_dir,omitempty"`
+	Initialization   map[string]any               `json:"initialization_options,omitempty"`
+	Context          context.Context              `json:"-"`
 	TransportFactory func() (LSPTransport, error) `json:"-"`
 }
 
 // LSPDriver implements CodeIntelligenceProvider for Language Server Protocol servers over JSON-RPC 2.0.
 type LSPDriver struct {
-	cfg       LSPDriverConfig
-	mu        sync.Mutex
-	writeMu   sync.Mutex
-	transport LSPTransport
-	reader    *bufio.Reader
-	seq       atomic.Int64
-	pending   map[int64]chan lspResponse
-	diags     map[string][]Diagnostic
-	diagsMu   sync.RWMutex
-	diagWait  map[string]chan struct{}
-	running   bool
-	closed    bool
+	cfg          LSPDriverConfig
+	mu           sync.Mutex
+	writeMu      sync.Mutex
+	transport    LSPTransport
+	reader       *bufio.Reader
+	seq          atomic.Int64
+	pending      map[int64]chan lspResponse
+	diags        map[string][]Diagnostic
+	diagsMu      sync.RWMutex
+	diagWait     map[string]chan struct{}
+	lifecycleCtx context.Context
+	cancelLife   context.CancelFunc
+	running      bool
+	shuttingDown bool
+	closed       bool
 }
 
 type lspRequest struct {
@@ -199,12 +203,27 @@ func NewLSPDriver(cfg LSPDriverConfig) *LSPDriver {
 	if cfg.Name == "" {
 		cfg.Name = "lsp"
 	}
-	return &LSPDriver{
-		cfg:      cfg,
-		pending:  make(map[int64]chan lspResponse),
-		diags:    make(map[string][]Diagnostic),
-		diagWait: make(map[string]chan struct{}),
+	baseCtx := cfg.Context
+	if baseCtx == nil {
+		baseCtx = context.Background()
 	}
+	lCtx, cancel := context.WithCancel(baseCtx)
+	d := &LSPDriver{
+		cfg:          cfg,
+		pending:      make(map[int64]chan lspResponse),
+		diags:        make(map[string][]Diagnostic),
+		diagWait:     make(map[string]chan struct{}),
+		lifecycleCtx: lCtx,
+		cancelLife:   cancel,
+	}
+
+	// Watch lifecycle context cancellation for graceful shutdown
+	go func() {
+		<-lCtx.Done()
+		_ = d.Close()
+	}()
+
+	return d
 }
 
 // Name returns the identifier of the provider.
@@ -244,7 +263,7 @@ func (d *LSPDriver) ensureRunning(ctx context.Context) error {
 			return errors.New("lsp command cannot be empty")
 		}
 
-		cmd := exec.CommandContext(ctx, cmdPath, d.cfg.Args...)
+		cmd := exec.CommandContext(d.lifecycleCtx, cmdPath, d.cfg.Args...)
 		if d.cfg.WorkspaceDir != "" {
 			cmd.Dir = d.cfg.WorkspaceDir
 		}
@@ -335,27 +354,38 @@ func (d *LSPDriver) ensureRunning(ctx context.Context) error {
 // Close gracefully terminates the LSP server session.
 func (d *LSPDriver) Close() error {
 	d.mu.Lock()
-	if d.closed {
+	if d.closed || d.shuttingDown {
 		d.mu.Unlock()
 		return nil
 	}
-	d.closed = true
+	d.shuttingDown = true
 	wasRunning := d.running
-	d.running = false
 	transport := d.transport
 	d.mu.Unlock()
 
+	if d.cancelLife != nil {
+		d.cancelLife()
+	}
+
 	if wasRunning && transport != nil {
 		// Attempt graceful LSP shutdown handshake with a short timeout
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		var res json.RawMessage
 		_ = d.call(shutdownCtx, "shutdown", nil, &res)
 		cancel()
 
 		_ = d.notify("exit", nil)
-		return transport.Close()
 	}
 
+	d.mu.Lock()
+	d.running = false
+	d.closed = true
+	d.shuttingDown = false
+	d.mu.Unlock()
+
+	if transport != nil {
+		return transport.Close()
+	}
 	return nil
 }
 
@@ -456,7 +486,7 @@ func (d *LSPDriver) call(ctx context.Context, method string, params any, result 
 
 	ch := make(chan lspResponse, 1)
 	d.mu.Lock()
-	if d.transport == nil || !d.running && method != "initialize" {
+	if d.transport == nil || (!d.running && method != "initialize") || (d.closed && method != "shutdown") {
 		d.mu.Unlock()
 		return errors.New("lsp driver not running")
 	}
@@ -876,6 +906,8 @@ func detectLanguageID(filePath string) string {
 	}
 }
 
+const maxLSPMessageBytes = 32 * 1024 * 1024 // 32MB safety ceiling
+
 // readLSPMessage parses a JSON-RPC message with LSP Content-Length framing.
 func readLSPMessage(reader *bufio.Reader) ([]byte, error) {
 	contentLength := -1
@@ -893,7 +925,7 @@ func readLSPMessage(reader *bufio.Reader) ([]byte, error) {
 			parts := strings.SplitN(trimmed, ":", 2)
 			if len(parts) == 2 {
 				val := strings.TrimSpace(parts[1])
-				if n, err := strconv.Atoi(val); err == nil {
+				if n, err := strconv.Atoi(val); err == nil && n >= 0 {
 					contentLength = n
 				}
 			}
@@ -902,6 +934,9 @@ func readLSPMessage(reader *bufio.Reader) ([]byte, error) {
 
 	if contentLength < 0 {
 		return nil, errors.New("missing Content-Length header in LSP message")
+	}
+	if contentLength > maxLSPMessageBytes {
+		return nil, fmt.Errorf("LSP message length %d exceeds max %d", contentLength, maxLSPMessageBytes)
 	}
 
 	body := make([]byte, contentLength)
@@ -912,12 +947,12 @@ func readLSPMessage(reader *bufio.Reader) ([]byte, error) {
 	return body, nil
 }
 
-// writeLSPMessage encodes a JSON payload with standard Content-Length HTTP-style header framing in a single buffer write.
+// writeLSPMessage encodes a JSON payload with standard Content-Length HTTP-style header framing.
 func writeLSPMessage(writer io.Writer, payload []byte) error {
 	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(payload))
-	msg := make([]byte, 0, len(header)+len(payload))
-	msg = append(msg, header...)
-	msg = append(msg, payload...)
-	_, err := writer.Write(msg)
+	if _, err := io.WriteString(writer, header); err != nil {
+		return err
+	}
+	_, err := writer.Write(payload)
 	return err
 }
