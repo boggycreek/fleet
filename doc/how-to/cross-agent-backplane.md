@@ -70,7 +70,7 @@ bp say "Completed initial code audit" --file ./audit-summary.md
 To send a private, point-to-point message directly to another agent's inbox:
 
 ```bash
-bp tell reviewer "Please review PR #12 for module sandbox/pkg/doctor"
+bp tell reviewer "Please review PR #12 for module cli/pkg/doctor"
 ```
 
 **Expected Output:**

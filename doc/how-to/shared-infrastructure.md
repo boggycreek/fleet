@@ -114,7 +114,81 @@ fleet infra down
 
 ---
 
-## 5. Troubleshooting Tips
+## 5. 128k KV Cache Topology Presets (`fleet infra topology`)
+
+Fleet supports standardized 128k token (131,072 context tokens) KV cache topologies for local host-bridged LLM inference engines (such as `llama-server` from llama.cpp) under [ADR 00055](../../doc/adr/00055-128kKvCacheScalingForLocalInference.md).
+
+Using 8-bit quantized KV cache (`-ctk q8_0 -ctv q8_0`) with 4-bit model weights (e.g., Spark-X2.5-4B `Q4_K_M`), the entire 128k context allocation requires only **~6.4 GB VRAM**, leaving >5.5 GB of headroom on standard 12 GB GPUs (e.g., NVIDIA RTX 3060).
+
+### Inspecting Available Presets (`fleet infra topology list`)
+
+To display a comparison table of available 128k KV cache topologies:
+
+```bash
+fleet infra topology list
+```
+
+**Expected Output:**
+```text
+Available 128k KV Cache Topology Presets (ADR 00055):
+
+PRESET         ALIASES                            SLOTS  CONTEXT/SLOT   TOTAL KV   EST. VRAM  TARGET WORKLOAD
+----------------------------------------------------------------------------------------------------
+swarm          swarm,topology-a,4x32k             4      32k (32768)    128k       ~6.4 GB    Autonomous 4-agent swarm (Fuzzer, Auditor, Verifier, Orchestrator)
+deep-context   deep,deep-context,topology-b,2x64k 2      64k (65536)    128k       ~6.4 GB    Deep pair programming & whole-package AST inspection (Fast-Reflex + Deep-Focus)
+```
+
+### Supported Topologies
+
+1. **`swarm` (Topology A: `4x32k`)**:
+   - **Slot Allocation**: 4 concurrent slots with 32,768 context tokens each (`-np 4 -c 131072`).
+   - **Target Workload**: Autonomous multi-agent swarms (e.g., Fuzzer, Auditor, Verifier, and Orchestrator collaborating simultaneously via the Valkey backplane).
+   - **Advantage**: Eliminates HTTP 400 context overflow errors during parallel agent execution while maximizing prompt prefix-cache sharing.
+
+2. **`deep-context` (Topology B: `2x64k`)**:
+   - **Slot Allocation**: 2 concurrent slots with 65,536 context tokens each (`-np 2 -c 131072`).
+   - **Target Workload**: Deep single-agent pair programming, comprehensive whole-package AST analysis, and large PR code reviews.
+   - **Advantage**: Provides 2× deeper token context windows for long documents and extended turn history.
+
+### Showing Detailed Preset Configuration (`fleet infra topology show`)
+
+To inspect a preset's memory budget, launch flags, and example commands:
+
+```bash
+fleet infra topology show swarm
+```
+
+**Expected Output:**
+```text
+Topology Preset: swarm (topology-a)
+  Aliases:            swarm, topology-a, 4x32k
+  Concurrent Slots:   4
+  Context Per Slot:   32k (32768 tokens)
+  Total KV Cache:     128k (131072 tokens)
+  KV Quantization:    q8_0 (K) / q8_0 (V)
+  Estimated VRAM:     ~6.4 GB (Spark-X2.5-4B Q4_K_M + Q8_0 KV)
+  Target Workload:    Autonomous 4-agent swarm (Fuzzer, Auditor, Verifier, Orchestrator)
+  Description:        4 concurrent slots @ 32k context each. Eliminates HTTP 400 overflows during multi-agent collaboration.
+
+  Launch Flags:
+    -np 4 -c 131072 -ctk q8_0 -ctv q8_0
+
+  Example Launch Command:
+    llama-server -m /path/to/model.gguf -np 4 -c 131072 -ctk q8_0 -ctv q8_0 --port 11434
+```
+
+### Extracting Engine Launch Arguments (`fleet infra topology args`)
+
+To extract the exact CLI arguments for scripting or server startup:
+
+```bash
+fleet infra topology args deep-context
+# Output: -np 2 -c 131072 -ctk q8_0 -ctv q8_0
+```
+
+---
+
+## 6. Troubleshooting Tips
 
 - **Forgejo return HTTP 500 or connection refused**:
   Verify container status with `fleet infra list`. If offline or unhealthy, run `fleet infra doctor` to attempt automated repair.

@@ -1,4 +1,16 @@
-# How-To: Getting Started with Fleet
+---
+name: fleet-howto-getting-started
+description: Step-by-step quickstart guide for installing Fleet, starting shared infrastructure, and launching your first autonomous agent.
+---
+
+<!--
+Copyright (c) 2026 Boggy Creek Software LLC
+
+Use of this source code is governed by an MIT-style
+license that can be found in the LICENSE file.
+-->
+
+# Getting Started with Fleet
 
 This guide takes you from a clean machine to running an autonomous, containerized AI agent using Fleet.
 
@@ -221,6 +233,8 @@ Agent "coder" retired and deprovisioned successfully.
 
 ## Next Steps
 
-- Explore [Cross-Agent Communication](cross-agent-communication.md) to exchange messages via `bp`.
-- Set up your favorite editor with [IDE Integration](ide-integration.md).
-- Learn self-healing techniques with [Diagnostics & Troubleshooting](diagnostics-and-troubleshooting.md).
+- Explore [Cross-Agent Backplane Messaging](cross-agent-backplane.md) to exchange messages via `bp`.
+- Set up your favorite editor with [IDE & Remote Development Integration](ide-remote-dev.md).
+- Learn self-healing techniques with [Diagnostics & Automated Self-Healing](diagnostics-and-healing.md).
+- Deploy physical machines with [Baremetal Agent Enrollment](baremetal-agent-setup.md).
+- Manage shared services and 128k KV cache presets with [Shared Infrastructure Management](shared-infrastructure.md).

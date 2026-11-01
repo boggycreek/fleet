@@ -22,7 +22,7 @@ Use `fleet agent create` (or `ft agent create`) to provision new agent configura
 
 ### Basic Syntax
 ```bash
-fleet agent create <name> [as <type>] [--role <role>] [--host|--no-container]
+fleet agent create <name> [as <type>] [--role <role>] [--host|--no-container|--baremetal --ssh-host <host>]
 ```
 
 ### Agent Types
@@ -30,6 +30,7 @@ fleet agent create <name> [as <type>] [--role <role>] [--host|--no-container]
 - **`opencode`**: OpenCode agent container setup.
 - **`claude`**: Claude Code agent harness.
 - **`agy`**: Antigravity agent setup.
+- **`baremetal`**: Baremetal physical host deployment without container isolation (see [Baremetal Agent Setup](baremetal-agent-setup.md)).
 
 ### Examples
 
@@ -57,6 +58,12 @@ fleet agent create reviewer as claude --role "Automated Code Reviewer"
 ```bash
 fleet agent create host-runner as native --host
 ```
+
+#### Provision a baremetal agent on a physical machine
+```bash
+fleet agent create worker-node-1 --baremetal --ssh-host 192.168.1.150 --role "Hardware Benchmarking"
+```
+*(For complete setup, bootstrapping via `install-agent.sh`, and systemd user services, refer to the [Baremetal Agent Setup Guide](baremetal-agent-setup.md)).*
 
 ---
 

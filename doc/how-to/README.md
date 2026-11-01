@@ -20,9 +20,11 @@ Welcome to the Fleet How-To documentation directory. While [`doc/ai/`](../ai/REA
 
 | Guide | Description | Key Commands Covered |
 | :--- | :--- | :--- |
+| **[Getting Started Quickstart](getting-started.md)** | Install Fleet, start background infrastructure, and launch your first autonomous agent. | `./install.sh`, `fleet infra up`, `fleet agent create`, `start` |
 | **[Agent Lifecycle Operations](agent-lifecycle.md)** | Create, provision, inspect, attach, clean, and retire agent instances safely. | `fleet agent create`, `start`, `list`, `tmux`, `ssh`, `clean`, `retire` |
+| **[Baremetal Agent Setup](baremetal-agent-setup.md)** | Enroll and deploy physical machines via one-time tokens, `install-agent.sh`, and systemd user services. | `fleet agent create --baremetal`, `install-agent.sh`, `systemctl --user` |
 | **[IDE & Remote Development Integration](ide-remote-dev.md)** | Connect desktop IDEs (VS Code, Cursor, JetBrains Gateway) and configure OpenSSH stanzas. | `fleet agent open`, `fleet agent ssh-config`, `Include` config |
-| **[Shared Infrastructure Management](shared-infrastructure.md)** | Manage shared Valkey 8 backplane and Forgejo 9 local forge services. | `fleet infra up`, `list`, `doctor`, `down` |
+| **[Shared Infrastructure Management](shared-infrastructure.md)** | Manage shared Valkey 8 backplane, Forgejo 9 forge, and 128k KV cache topology presets. | `fleet infra up`, `list`, `doctor`, `down`, `fleet infra topology` |
 | **[Cross-Agent Backplane Messaging](cross-agent-backplane.md)** | Broadcast messages, send direct peer requests, reply to threads, and set status with `bp`. | `bp whoami`, `say`, `tell`, `reply`, `recv`, `peers`, `finger`, `status set` |
 | **[Diagnostics & Automated Self-Healing](diagnostics-and-healing.md)** | Inspect agent health and understand automatic defect remediation across SSH, Valkey, and Forgejo. | `fleet agent doctor <name>`, status checks & auto-healers |
 
