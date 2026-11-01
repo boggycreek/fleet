@@ -152,6 +152,7 @@ build-cli: ## Build native Go CLI binaries (fleet, bp, bpd, mcps)
 		ln -sf forgejo-mcp $(BIN_DIR)/gitea-mcp; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/beads-mcp ./mcp/cmd/beads-mcp; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/sonar-mcp ./mcp/cmd/sonar-mcp; \
+		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/valkey-guard ./backplane/cmd/valkey-guard; \
 		$(GO) build $(GOFLAGS) -o $(BIN_DIR)/fleet-openrouter-proxy ./cli/cmd/fleet-openrouter-proxy; \
 		echo "Binaries built in $(BIN_DIR)/ (alias: $(BIN_DIR)/ft)"; \
 	else \
@@ -173,7 +174,7 @@ install: build-cli ## Install CLI binaries and aliases into $(INSTALL_BIN_DIR)
 			(cd $(INSTALL_BIN_DIR) && ln -sf fleet ft); \
 		fi; \
 	fi
-	@for bin in fleet-agent bp bpd bp-mcp forgejo-mcp gitea-mcp beads-mcp sonar-mcp; do \
+	@for bin in fleet-agent bp bpd bp-mcp forgejo-mcp gitea-mcp beads-mcp sonar-mcp valkey-guard; do \
 		if [ -f $(BIN_DIR)/$$bin ]; then cp -f $(BIN_DIR)/$$bin $(INSTALL_BIN_DIR)/$$bin; fi; \
 	done
 	@echo "Installed binaries (fleet (alias: ft), bp, bpd, mcps) in $(INSTALL_BIN_DIR)/"
