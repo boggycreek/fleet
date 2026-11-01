@@ -45,6 +45,14 @@ const (
 // ExecCommandContext is a variable for stubbing in tests.
 var ExecCommandContext = exec.CommandContext
 
+var (
+	userHomeDir = os.UserHomeDir
+	currentGOOS = runtime.GOOS
+	newZipWriter = func(w io.Writer) *zip.Writer {
+		return zip.NewWriter(w)
+	}
+)
+
 // PluginInfo describes a supported or installed IDE plugin.
 type PluginInfo struct {
 	ID          string   `json:"id"`
@@ -119,7 +127,7 @@ func GenerateGatewayPluginXML() string {
 // GenerateGatewayPluginJAR creates an in-memory valid JAR archive for the Gateway plugin.
 func GenerateGatewayPluginJAR() ([]byte, error) {
 	buf := new(bytes.Buffer)
-	zw := zip.NewWriter(buf)
+	zw := newZipWriter(buf)
 
 	// 1. META-INF/MANIFEST.MF
 	manifestContent := "Manifest-Version: 1.0\r\nCreated-By: " + JetBrainsPluginVendor + "\r\n\r\n"
@@ -177,7 +185,7 @@ func GenerateToolboxPluginIconSVG() string {
 // GenerateToolboxPluginJAR creates an in-memory valid JAR archive for the Toolbox plugin.
 func GenerateToolboxPluginJAR() ([]byte, error) {
 	buf := new(bytes.Buffer)
-	zw := zip.NewWriter(buf)
+	zw := newZipWriter(buf)
 
 	// 1. META-INF/MANIFEST.MF
 	manifestContent := "Manifest-Version: 1.0\r\nCreated-By: " + JetBrainsPluginVendor + "\r\n\r\n"
@@ -226,13 +234,13 @@ func GenerateToolboxPluginJAR() ([]byte, error) {
 
 // GetDefaultJetBrainsSearchRoots resolves standard root locations for JetBrains IDE installations.
 func GetDefaultJetBrainsSearchRoots() []string {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return nil
 	}
 
 	var searchRoots []string
-	switch runtime.GOOS {
+	switch currentGOOS {
 	case "darwin":
 		searchRoots = append(searchRoots, filepath.Join(home, "Library", "Application Support", "JetBrains"))
 	case "windows":
@@ -282,11 +290,11 @@ func FindJetBrainsPluginDirs() []string {
 
 // GetDefaultToolboxPluginDir returns the target plugin directory for JetBrains Toolbox App.
 func GetDefaultToolboxPluginDir() string {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return ""
 	}
-	switch runtime.GOOS {
+	switch currentGOOS {
 	case "darwin":
 		return filepath.Join(home, "Library", "Application Support", "JetBrains", "Toolbox", "plugins", "fleet")
 	case "windows":
@@ -301,11 +309,11 @@ func GetDefaultToolboxPluginDir() string {
 
 // GetDefaultToolboxSSHSettingsPath returns the location of JetBrains Toolbox SSH provider settings.
 func GetDefaultToolboxSSHSettingsPath() string {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return ""
 	}
-	switch runtime.GOOS {
+	switch currentGOOS {
 	case "darwin":
 		return filepath.Join(home, "Library", "Application Support", "JetBrains", "Toolbox", "plugins", "ssh", "settings.json")
 	case "windows":

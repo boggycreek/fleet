@@ -499,3 +499,141 @@ func TestValidateNameAndUnreachableServices(t *testing.T) {
 		t.Errorf("expected error getting invalid name with extra slash")
 	}
 }
+
+func TestProjectSaveAndList_FailureModes(t *testing.T) {
+	gServer, sServer, gClient, sClient := setupMockServers(t)
+	tmpDir := t.TempDir()
+	paths := config.Paths{
+		DataHome:    tmpDir,
+		ProjectsDir: filepath.Join(tmpDir, "projects"),
+	}
+	_ = paths.EnsureDirectories()
+	mgr := NewManagerWithClients(paths, gClient, sClient, gServer.URL, sServer.URL)
+	ctx := context.Background()
+
+	// 1. Save failure: Temp file creation failure (read-only ProjectsDir)
+	readOnlyDir := filepath.Join(tmpDir, "readonly_projects")
+	if err := os.MkdirAll(readOnlyDir, 0500); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(readOnlyDir, 0755)
+	})
+	roPaths := config.Paths{
+		DataHome:    tmpDir,
+		ProjectsDir: readOnlyDir,
+	}
+	roMgr := NewManagerWithClients(roPaths, nil, nil, "", "")
+	p := &Project{Name: "app", Org: "factory"}
+	if err := roMgr.Save(p); err == nil {
+		t.Errorf("expected error saving to read-only projects directory")
+	}
+
+	// 2. Save failure: Rename failure (target metadata file is an existing non-empty directory)
+	targetMetaPath := filepath.Join(paths.ProjectsDir, metadataFilename("factory", "app-dir-conflict"))
+	if err := os.MkdirAll(filepath.Join(targetMetaPath, "nested"), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	conflictProj := &Project{Name: "app-dir-conflict", Org: "factory"}
+	if err := mgr.Save(conflictProj); err == nil {
+		t.Errorf("expected error saving project when target is a directory")
+	}
+
+	// 3. List failure: ProjectsDir is a regular file (not a directory)
+	fileAsProjectsDir := filepath.Join(tmpDir, "file_as_projects")
+	if err := os.WriteFile(fileAsProjectsDir, []byte("plain file"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	notDirPaths := config.Paths{
+		DataHome:    tmpDir,
+		ProjectsDir: fileAsProjectsDir,
+	}
+	notDirMgr := NewManagerWithClients(notDirPaths, nil, nil, "", "")
+	if _, err := notDirMgr.List(ctx); err == nil {
+		t.Errorf("expected error from List when ProjectsDir is a file")
+	}
+
+	// 4. List handling of corrupted JSON, subdirectories, non-json files, unreadable files
+	// Subdirectory inside ProjectsDir
+	_ = os.MkdirAll(filepath.Join(paths.ProjectsDir, "some-dir"), 0755)
+	// Non-json file
+	_ = os.WriteFile(filepath.Join(paths.ProjectsDir, "notes.txt"), []byte("some notes"), 0644)
+	// Empty json file (malformed)
+	_ = os.WriteFile(filepath.Join(paths.ProjectsDir, "empty.json"), []byte(""), 0644)
+	// Corrupt json file
+	_ = os.WriteFile(filepath.Join(paths.ProjectsDir, "malformed.json"), []byte("{invalid-json"), 0644)
+	// Unreadable file (read error during list)
+	unreadableFile := filepath.Join(paths.ProjectsDir, "unreadable.json")
+	_ = os.WriteFile(unreadableFile, []byte("{}"), 0000)
+	t.Cleanup(func() {
+		_ = os.Chmod(unreadableFile, 0644)
+	})
+
+	// Valid project with GiteaURL only (to test backward compatibility fallback)
+	giteaOnlyProj := &Project{
+		Name:     "gitea-legacy",
+		Org:      "factory",
+		GiteaURL: "http://127.0.0.1:3000/factory/gitea-legacy",
+	}
+	if err := mgr.Save(giteaOnlyProj); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	// Valid project with ForgejoURL only (to test backward compatibility fallback)
+	forgejoOnlyProj := &Project{
+		Name:       "forgejo-app",
+		Org:        "factory",
+		ForgejoURL: "http://127.0.0.1:3000/factory/forgejo-app",
+	}
+	if err := mgr.Save(forgejoOnlyProj); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	projects, err := mgr.List(ctx)
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("expected 2 valid projects, got %d", len(projects))
+	}
+	for _, prj := range projects {
+		if prj.ForgejoURL == "" || prj.GiteaURL == "" {
+			t.Errorf("expected both ForgejoURL and GiteaURL to be populated: %+v", prj)
+		}
+	}
+
+	// 5. Get with URL fallbacks
+	gotLegacy, err := mgr.Get(ctx, "factory", "gitea-legacy")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if gotLegacy.ForgejoURL == "" || gotLegacy.GiteaURL == "" {
+		t.Errorf("expected URL fallbacks in Get: %+v", gotLegacy)
+	}
+
+	// Get with slashed project name (e.g. "factory/forgejo-app") and empty org
+	gotSlashed, err := mgr.Get(ctx, "", "factory/forgejo-app")
+	if err != nil {
+		t.Fatalf("Get with slash failed: %v", err)
+	}
+	if gotSlashed.Name != "forgejo-app" || gotSlashed.Org != "factory" {
+		t.Errorf("unexpected slashed get result: %+v", gotSlashed)
+	}
+
+	// FormatList with empty list and populated list
+	if formatted := FormatList(nil); !strings.Contains(formatted, "No projects registered") {
+		t.Errorf("unexpected empty FormatList: %s", formatted)
+	}
+	formattedProj := FormatList([]*Project{
+		{
+			Org:        "factory",
+			Name:       "sample",
+			GiteaURL:   "http://gitea.local/sample",
+			SonarURL:   "http://sonar.local/sample",
+			ScanStatus: "PASSED",
+		},
+	})
+	if !strings.Contains(formattedProj, "http://gitea.local/sample") {
+		t.Errorf("expected GiteaURL fallback in FormatList: %s", formattedProj)
+	}
+}
