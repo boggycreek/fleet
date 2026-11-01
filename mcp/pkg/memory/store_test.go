@@ -6,6 +6,7 @@
 package memory
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -270,4 +271,170 @@ func TestNewStoreEnvDirFallback(t *testing.T) {
 	if store.RootDir() != filepath.Join(tempDir, "env_memory") {
 		t.Errorf("expected store rootDir %q, got %q", filepath.Join(tempDir, "env_memory"), store.RootDir())
 	}
+}
+
+func TestNewStoreDirectoryErrorsAndCorruptedFiles(t *testing.T) {
+	tempDir := t.TempDir()
+
+	t.Run("NewStore fails when rootDir is a file", func(t *testing.T) {
+		filePath := filepath.Join(tempDir, "a-regular-file")
+		if err := os.WriteFile(filePath, []byte("plain text"), 0644); err != nil {
+			t.Fatalf("failed to create dummy file: %v", err)
+		}
+
+		// Trying to create a directory where a file exists will cause MkdirAll to fail
+		subDirPath := filepath.Join(filePath, "subfolder")
+		_, err := NewStore(StoreConfig{RootDir: subDirPath})
+		if err == nil {
+			t.Errorf("expected error initializing store inside a regular file path, got nil")
+		}
+	})
+
+	t.Run("loadExisting handles corrupted and non-memory markdown files gracefully", func(t *testing.T) {
+		storeDir := filepath.Join(tempDir, "corrupted_store")
+		if err := os.MkdirAll(filepath.Join(storeDir, "episodic"), 0755); err != nil {
+			t.Fatalf("failed to create storeDir: %v", err)
+		}
+
+		// Write a valid memory file
+		validItem := &MemoryItem{
+			ID:            "valid-1",
+			Pillar:        "episodic",
+			Title:         "Valid Item",
+			Tier1Abstract: "Valid abstract",
+		}
+		formatted := FormatDocument(validItem)
+		if err := os.WriteFile(filepath.Join(storeDir, "episodic", "2026-10-30-valid-item.md"), []byte(formatted), 0644); err != nil {
+			t.Fatalf("failed to write valid item: %v", err)
+		}
+
+		// Write an invalid markdown file without valid frontmatter
+		if err := os.WriteFile(filepath.Join(storeDir, "episodic", "non-memory.md"), []byte("# Just a random note"), 0644); err != nil {
+			t.Fatalf("failed to write non-memory note: %v", err)
+		}
+
+		// Write a non-markdown file (.txt)
+		if err := os.WriteFile(filepath.Join(storeDir, "notes.txt"), []byte("random text"), 0644); err != nil {
+			t.Fatalf("failed to write notes.txt: %v", err)
+		}
+
+		store, err := NewStore(StoreConfig{RootDir: storeDir})
+		if err != nil {
+			t.Fatalf("expected NewStore to ignore invalid markdown files gracefully, got: %v", err)
+		}
+
+		item, err := store.Get("valid-1", 1)
+		if err != nil || item == nil {
+			t.Fatalf("expected to retrieve valid-1, got err: %v", err)
+		}
+	})
+
+	t.Run("Save fails when pillar directory cannot be created", func(t *testing.T) {
+		storeDir := filepath.Join(tempDir, "pillar_fail_store")
+		if err := os.MkdirAll(storeDir, 0755); err != nil {
+			t.Fatalf("failed to create storeDir: %v", err)
+		}
+
+		// Create a file named 'episodic' so MkdirAll fails
+		pillarFilePath := filepath.Join(storeDir, "episodic")
+		if err := os.WriteFile(pillarFilePath, []byte("file blocker"), 0644); err != nil {
+			t.Fatalf("failed to create pillar blocking file: %v", err)
+		}
+
+		store, err := NewStore(StoreConfig{RootDir: storeDir})
+		if err != nil {
+			t.Fatalf("failed to initialize store: %v", err)
+		}
+
+		_, err = store.Save(&MemoryItem{
+			Pillar:        "episodic",
+			Title:         "Should Fail",
+			Tier1Abstract: "Test",
+		})
+		if err == nil {
+			t.Errorf("expected error when pillar directory is blocked by a file, got nil")
+		}
+	})
+
+	t.Run("Save fails when file write fails", func(t *testing.T) {
+		storeDir := filepath.Join(tempDir, "write_fail_store")
+		store, err := NewStore(StoreConfig{RootDir: storeDir})
+		if err != nil {
+			t.Fatalf("failed to initialize store: %v", err)
+		}
+
+		// Pre-create a directory with the exact memory file name
+		item := &MemoryItem{
+			Pillar:        "semantic",
+			Timestamp:     "2026-10-30T10:00:00Z",
+			Title:         "Directory Blocker",
+			Tier1Abstract: "Abstract",
+		}
+		targetFileName := "2026-10-30-directory-blocker.md"
+		targetFilePath := filepath.Join(storeDir, "semantic", targetFileName)
+		if err := os.MkdirAll(targetFilePath, 0755); err != nil {
+			t.Fatalf("failed to create directory blocker: %v", err)
+		}
+
+		_, err = store.Save(item)
+		if err == nil {
+			t.Errorf("expected error when file cannot be written (directory exists with same name), got nil")
+		}
+	})
+}
+
+func TestStoreEdgeCases(t *testing.T) {
+	t.Run("cloneItem nil returns nil", func(t *testing.T) {
+		if got := cloneItem(nil, 3); got != nil {
+			t.Errorf("expected nil for cloneItem(nil), got %+v", got)
+		}
+	})
+
+	t.Run("Get with clean path fallback", func(t *testing.T) {
+		tempDir := t.TempDir()
+		store, err := NewStore(StoreConfig{RootDir: tempDir})
+		if err != nil {
+			t.Fatalf("failed to create store: %v", err)
+		}
+
+		saved, err := store.Save(&MemoryItem{
+			Pillar:        "episodic",
+			Title:         "Path Cleaning Test",
+			Tier1Abstract: "Test",
+		})
+		if err != nil {
+			t.Fatalf("failed to save: %v", err)
+		}
+
+		// Retrieve with uncleaned relative path (e.g. episodic/./filename)
+		uncleanPath := filepath.Join("episodic", ".", filepath.Base(saved.Path))
+		got, err := store.Get(uncleanPath, 1)
+		if err != nil {
+			t.Fatalf("expected Get with unclean path to succeed via Clean: %v", err)
+		}
+		if got.ID != saved.ID {
+			t.Errorf("expected ID %q, got %q", saved.ID, got.ID)
+		}
+	})
+
+	t.Run("Save with fallback timestamp on parse error and title fallback", func(t *testing.T) {
+		tempDir := t.TempDir()
+		store, _ := NewStore(StoreConfig{RootDir: tempDir})
+
+		saved, err := store.Save(&MemoryItem{
+			Pillar:        "episodic",
+			Timestamp:     "not-a-valid-timestamp",
+			Title:         "",
+			Tier1Abstract: "Fallback Abstract",
+		})
+		if err != nil {
+			t.Fatalf("unexpected save error: %v", err)
+		}
+		if saved.Title != "Fallback Abstract" {
+			t.Errorf("expected title to fall back to Tier1Abstract, got %q", saved.Title)
+		}
+		if saved.Timestamp == "not-a-valid-timestamp" {
+			t.Errorf("expected timestamp to fall back to current RFC3339 time, got %q", saved.Timestamp)
+		}
+	})
 }

@@ -509,3 +509,236 @@ func TestForgejoClientSuite(t *testing.T) {
 	_, _ = badClient.GetFile(ctx, "fleet", "tools", "README.md", "main")
 	_, _ = badClient.CreateCommitStatus(ctx, "fleet", "tools", "sha123", CreateCommitStatusOptions{})
 }
+
+func TestAddOrgMemberAndTeamEdgeCases(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		switch {
+		// RepoExists unexpected status
+		case r.Method == http.MethodGet && path == "/api/v1/repos/fleet/server-error-repo":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"message":"server error"}`))
+
+		// EnsureTeam: team already exists
+		case r.Method == http.MethodGet && path == "/api/v1/orgs/myorg/teams":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[{"id":55,"name":"Contributors"}]`))
+
+		// EnsureTeam: team missing and post fails
+		case r.Method == http.MethodGet && path == "/api/v1/orgs/fail-team-org/teams":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+
+		case r.Method == http.MethodPost && path == "/api/v1/orgs/fail-team-org/teams":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"message":"cannot create team"}`))
+
+		// AddOrgMember: direct PUT returns 404
+		case r.Method == http.MethodPut && path == "/api/v1/orgs/notfound-org/members/test-agent":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"org not found"}`))
+
+		// AddOrgMember: direct PUT returns 403
+		case r.Method == http.MethodPut && path == "/api/v1/orgs/forbidden-org/members/test-agent":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"permission denied"}`))
+
+		// AddOrgMember: direct PUT returns 405, then teams GET fails with 500
+		case r.Method == http.MethodPut && path == "/api/v1/orgs/teams-500-org/members/test-agent":
+			w.WriteHeader(http.StatusMethodNotAllowed)
+
+		case r.Method == http.MethodGet && path == "/api/v1/orgs/teams-500-org/teams":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"message":"teams retrieval failed"}`))
+
+		// AddOrgMember: direct PUT returns 405, then teams GET returns invalid json
+		case r.Method == http.MethodPut && path == "/api/v1/orgs/teams-badjson-org/members/test-agent":
+			w.WriteHeader(http.StatusMethodNotAllowed)
+
+		case r.Method == http.MethodGet && path == "/api/v1/orgs/teams-badjson-org/teams":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`invalid json`))
+
+		// AddOrgMember: direct PUT returns 405, teams has only Owners, EnsureTeam fallback called, refreshed teams still only has Owners
+		case r.Method == http.MethodPut && path == "/api/v1/orgs/only-owners-org/members/test-agent":
+			w.WriteHeader(http.StatusMethodNotAllowed)
+
+		case r.Method == http.MethodGet && path == "/api/v1/orgs/only-owners-org/teams":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Owners"}]`))
+
+		case r.Method == http.MethodPost && path == "/api/v1/orgs/only-owners-org/teams":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":2,"name":"contributors"}`))
+
+		// AddOrgMember: direct PUT returns 405, teams has unprivileged 'agents' team
+		case r.Method == http.MethodPut && path == "/api/v1/orgs/agents-team-org/members/test-agent":
+			w.WriteHeader(http.StatusMethodNotAllowed)
+
+		case r.Method == http.MethodGet && path == "/api/v1/orgs/agents-team-org/teams":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[{"id":10,"name":"Owners"},{"id":20,"name":"Agents"}]`))
+
+		case r.Method == http.MethodPut && path == "/api/v1/teams/20/members/test-agent":
+			w.WriteHeader(http.StatusOK)
+
+		// AddOrgMember: direct PUT returns 405, teams has arbitrary non-owners team (e.g. Developers)
+		case r.Method == http.MethodPut && path == "/api/v1/orgs/other-team-org/members/test-agent":
+			w.WriteHeader(http.StatusMethodNotAllowed)
+
+		case r.Method == http.MethodGet && path == "/api/v1/orgs/other-team-org/teams":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[{"id":10,"name":"Owners"},{"id":30,"name":"Developers"}]`))
+
+		case r.Method == http.MethodPut && path == "/api/v1/teams/30/members/test-agent":
+			w.WriteHeader(http.StatusNoContent)
+
+		// AddOrgMember: direct PUT returns 405, only Owners team, but refreshed teams has contributors
+		case r.Method == http.MethodPut && path == "/api/v1/orgs/ensure-contrib-org/members/test-agent":
+			w.WriteHeader(http.StatusMethodNotAllowed)
+
+		case r.Method == http.MethodGet && path == "/api/v1/orgs/ensure-contrib-org/teams":
+			// If request header or state indicates second query:
+			// For simplicity, return owners on initial query if query param not set, or simulate by query sequence
+			w.WriteHeader(http.StatusOK)
+			// Return only owners so it calls EnsureTeam
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Owners"}]`))
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	client := NewClient(ClientConfig{BaseURL: ts.URL, Token: "token"})
+	ctx := context.Background()
+
+	t.Run("RepoExists unexpected status returns error", func(t *testing.T) {
+		exists, err := client.RepoExists(ctx, "fleet", "server-error-repo")
+		if err == nil || exists {
+			t.Fatalf("expected error on 500 status in RepoExists, got exists=%v, err=%v", exists, err)
+		}
+		if !strings.Contains(err.Error(), "unexpected status 500") {
+			t.Errorf("expected 'unexpected status 500' in error, got %v", err)
+		}
+	})
+
+	t.Run("EnsureTeam returns nil when team already exists", func(t *testing.T) {
+		err := client.EnsureTeam(ctx, "myorg", "contributors")
+		if err != nil {
+			t.Fatalf("expected existing team to return nil, got: %v", err)
+		}
+	})
+
+	t.Run("EnsureTeam fails when creation returns error status", func(t *testing.T) {
+		err := client.EnsureTeam(ctx, "fail-team-org", "contributors")
+		if err == nil {
+			t.Fatalf("expected error when EnsureTeam POST fails, got nil")
+		}
+	})
+
+	t.Run("AddOrgMember HTTP 404 returns error", func(t *testing.T) {
+		err := client.AddOrgMember(ctx, "notfound-org", "test-agent")
+		if err == nil {
+			t.Fatalf("expected error on 404, got nil")
+		}
+		if !strings.Contains(err.Error(), "status 404") {
+			t.Errorf("expected status 404 in error, got: %v", err)
+		}
+	})
+
+	t.Run("AddOrgMember HTTP 403 returns error", func(t *testing.T) {
+		err := client.AddOrgMember(ctx, "forbidden-org", "test-agent")
+		if err == nil {
+			t.Fatalf("expected error on 403, got nil")
+		}
+		if !strings.Contains(err.Error(), "status 403") {
+			t.Errorf("expected status 403 in error, got: %v", err)
+		}
+	})
+
+	t.Run("AddOrgMember with 405 and teams GET failure returns error", func(t *testing.T) {
+		err := client.AddOrgMember(ctx, "teams-500-org", "test-agent")
+		if err == nil {
+			t.Fatalf("expected error when teams GET returns 500, got nil")
+		}
+	})
+
+	t.Run("AddOrgMember with 405 and teams GET bad json falls through to org error", func(t *testing.T) {
+		err := client.AddOrgMember(ctx, "teams-badjson-org", "test-agent")
+		if err == nil {
+			t.Fatalf("expected error when teams GET returns bad json, got nil")
+		}
+		if !strings.Contains(err.Error(), "status 405") {
+			t.Errorf("expected status 405 in error, got: %v", err)
+		}
+	})
+
+	t.Run("AddOrgMember with 405 and Agents team fallback succeeds", func(t *testing.T) {
+		err := client.AddOrgMember(ctx, "agents-team-org", "test-agent")
+		if err != nil {
+			t.Fatalf("expected AddOrgMember to succeed with Agents team, got: %v", err)
+		}
+	})
+
+	t.Run("AddOrgMember with 405 and first non-owners team fallback succeeds", func(t *testing.T) {
+		err := client.AddOrgMember(ctx, "other-team-org", "test-agent")
+		if err != nil {
+			t.Fatalf("expected AddOrgMember to succeed with Developers team, got: %v", err)
+		}
+	})
+
+	t.Run("AddOrgMember with 405 and only Owners team returns error", func(t *testing.T) {
+		err := client.AddOrgMember(ctx, "only-owners-org", "test-agent")
+		if err == nil {
+			t.Fatalf("expected error when only Owners team exists, got nil")
+		}
+		if !strings.Contains(err.Error(), "only administrative 'Owners' team exists") {
+			t.Errorf("expected administrative Owners team error, got: %v", err)
+		}
+	})
+
+	t.Run("AddOrgMember context timeout/cancellation", func(t *testing.T) {
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel() // immediately cancel
+		err := client.AddOrgMember(canceledCtx, "fleet", "test-agent")
+		if err == nil {
+			t.Fatalf("expected error with canceled context, got nil")
+		}
+	})
+}
+
+func TestAddOrgMemberEnsureTeamFallbackSuccess(t *testing.T) {
+	// Tests the path where initially only Owners exists, EnsureTeam runs, and refreshed teams includes contributors
+	var teamsCallCount int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case r.Method == http.MethodPut && path == "/api/v1/orgs/refresh-org/members/test-agent":
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		case r.Method == http.MethodGet && path == "/api/v1/orgs/refresh-org/teams":
+			teamsCallCount++
+			w.WriteHeader(http.StatusOK)
+			if teamsCallCount == 1 {
+				_, _ = w.Write([]byte(`[{"id":1,"name":"Owners"}]`))
+			} else {
+				_, _ = w.Write([]byte(`[{"id":1,"name":"Owners"},{"id":500,"name":"contributors"}]`))
+			}
+		case r.Method == http.MethodPost && path == "/api/v1/orgs/refresh-org/teams":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":500,"name":"contributors"}`))
+		case r.Method == http.MethodPut && path == "/api/v1/teams/500/members/test-agent":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	client := NewClient(ClientConfig{BaseURL: ts.URL, Token: "tok"})
+	err := client.AddOrgMember(context.Background(), "refresh-org", "test-agent")
+	if err != nil {
+		t.Fatalf("expected AddOrgMember to succeed after EnsureTeam refreshed contributors: %v", err)
+	}
+}
