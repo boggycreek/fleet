@@ -13,7 +13,7 @@ COPY go.work ./
 COPY agent/ ./agent/
 COPY backplane/ ./backplane/
 COPY mcp/ ./mcp/
-COPY sandbox/ ./sandbox/
+COPY cli/ ./cli/
 
 RUN mkdir -p /opt/fleet/engine && \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /opt/fleet/engine/fleet-agent ./agent/cmd/fleet-agent && \

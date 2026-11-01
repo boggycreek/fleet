@@ -8,7 +8,7 @@ FROM docker.io/library/golang:1.24-alpine AS builder
 WORKDIR /app
 COPY . .
 
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /bin/fleet-openrouter-proxy ./sandbox/cmd/fleet-openrouter-proxy
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /bin/fleet-openrouter-proxy ./cli/cmd/fleet-openrouter-proxy
 
 FROM docker.io/library/alpine:latest
 
