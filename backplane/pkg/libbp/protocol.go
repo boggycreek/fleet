@@ -40,6 +40,8 @@ const (
 	DefaultPollInterval = 60
 	MinPollInterval     = 5
 	MaxPollInterval     = 3600
+
+	PingChannel = "broadcast"
 )
 
 // Key generation helper functions
