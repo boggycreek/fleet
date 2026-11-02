@@ -7,6 +7,8 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -43,6 +45,9 @@ func TestGetInfraInfo_Masked(t *testing.T) {
 	}
 	if info.ValkeyGuard.HostPort != "127.0.0.1:6380" {
 		t.Errorf("expected valkey-guard host port 127.0.0.1:6380, got %s", info.ValkeyGuard.HostPort)
+	}
+	if info.ValkeyGuard.MTLSEnabled {
+		t.Errorf("expected mTLS disabled when no certs exist")
 	}
 
 	if info.OpenRouter.InternalURL != "http://fleet-openrouter:8080/v1" {
@@ -189,6 +194,46 @@ func TestGetInfraInfo_DefaultsAndFallbacks(t *testing.T) {
 	}
 	if info.SonarQube.Status != "disabled" {
 		t.Errorf("expected sonarqube status 'disabled' when SONAR_DISABLED=1, got: %s", info.SonarQube.Status)
+	}
+}
+
+func TestGetInfraInfo_WithMTLS(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	tlsDir := filepath.Join(tmpDir, "tls")
+	_ = os.MkdirAll(tlsDir, 0700)
+	_ = os.WriteFile(filepath.Join(tlsDir, "server.crt"), []byte("cert"), 0600)
+	_ = os.WriteFile(filepath.Join(tlsDir, "server.key"), []byte("key"), 0600)
+	_ = os.WriteFile(filepath.Join(tlsDir, "ca.crt"), []byte("ca"), 0600)
+
+	t.Setenv("FLEET_TLS_DIR", tlsDir)
+	t.Setenv("FLEET_BIND_INTERFACE", "127.0.0.1")
+
+	paths := config.Paths{
+		DataHome: filepath.Join(tmpDir, "data"),
+	}
+
+	info, err := GetInfraInfo(ctx, paths, false)
+	if err != nil {
+		t.Fatalf("GetInfraInfo failed: %v", err)
+	}
+
+	if info.ValkeyGuard == nil {
+		t.Fatalf("expected ValkeyGuard to be non-nil")
+	}
+	if !info.ValkeyGuard.MTLSEnabled {
+		t.Errorf("expected MTLSEnabled to be true")
+	}
+	if info.ValkeyGuard.MTLSHostPort != "127.0.0.1:6380" {
+		t.Errorf("expected MTLSHostPort 127.0.0.1:6380, got %s", info.ValkeyGuard.MTLSHostPort)
+	}
+
+	formatted := FormatInfraInfo(info)
+	if !strings.Contains(formatted, "mtls_enabled:") || !strings.Contains(formatted, "true") {
+		t.Errorf("expected mtls_enabled: true in formatted info, got:\n%s", formatted)
+	}
+	if !strings.Contains(formatted, "mtls_host_port:") || !strings.Contains(formatted, "127.0.0.1:6380") {
+		t.Errorf("expected mtls_host_port: 127.0.0.1:6380 in formatted info, got:\n%s", formatted)
 	}
 }
 

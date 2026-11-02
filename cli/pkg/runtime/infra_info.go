@@ -23,6 +23,8 @@ type ValkeyGuardInfraInfo struct {
 	InternalEndpoint string `json:"internal_endpoint"`
 	HostPort         string `json:"host_port"`
 	Target           string `json:"target"`
+	MTLSEnabled      bool   `json:"mtls_enabled"`
+	MTLSHostPort     string `json:"mtls_host_port,omitempty"`
 }
 
 // ValkeyInfraInfo holds connection and credential details for Valkey.
@@ -152,12 +154,23 @@ func GetInfraInfo(ctx context.Context, paths config.Paths, showSecrets bool) (*I
 		valkeyDisplayPass = humanPass
 	}
 
+	_, hasTLS := DetectTLSDir(paths)
 	valkeyGuardInfo := &ValkeyGuardInfraInfo{
 		Status:           getState(infraValkeyGuardContainer),
 		Container:        infraValkeyGuardContainer,
 		InternalEndpoint: fmt.Sprintf("valkey-guard:%s", valkeyPort),
 		HostPort:         fmt.Sprintf("127.0.0.1:%s", valkeyPort),
 		Target:           fmt.Sprintf("%s:6379", infraValkeyContainer),
+		MTLSEnabled:      hasTLS,
+	}
+	if hasTLS {
+		bindHost := "127.0.0.1"
+		if envBind := strings.TrimSpace(os.Getenv("FLEET_BIND_INTERFACE")); envBind != "" {
+			bindHost = envBind
+		} else if envBind := strings.TrimSpace(os.Getenv("VALKEY_GUARD_BIND")); envBind != "" {
+			bindHost = envBind
+		}
+		valkeyGuardInfo.MTLSHostPort = fmt.Sprintf("%s:6380", bindHost)
 	}
 
 	valkeyInfo := &ValkeyInfraInfo{
@@ -308,15 +321,20 @@ func FormatInfraInfo(info *InfraStackInfo) string {
 	var sections []infoSection
 
 	if info.ValkeyGuard != nil {
+		vgPairs := []infoPair{
+			{"status", info.ValkeyGuard.Status},
+			{"container", info.ValkeyGuard.Container},
+			{"internal_endpoint", info.ValkeyGuard.InternalEndpoint},
+			{"host_port", info.ValkeyGuard.HostPort},
+			{"target", info.ValkeyGuard.Target},
+			{"mtls_enabled", fmt.Sprintf("%t", info.ValkeyGuard.MTLSEnabled)},
+		}
+		if info.ValkeyGuard.MTLSEnabled && info.ValkeyGuard.MTLSHostPort != "" {
+			vgPairs = append(vgPairs, infoPair{"mtls_host_port", info.ValkeyGuard.MTLSHostPort})
+		}
 		sections = append(sections, infoSection{
 			header: "[valkey-guard]",
-			pairs: []infoPair{
-				{"status", info.ValkeyGuard.Status},
-				{"container", info.ValkeyGuard.Container},
-				{"internal_endpoint", info.ValkeyGuard.InternalEndpoint},
-				{"host_port", info.ValkeyGuard.HostPort},
-				{"target", info.ValkeyGuard.Target},
-			},
+			pairs:  vgPairs,
 		})
 	}
 
