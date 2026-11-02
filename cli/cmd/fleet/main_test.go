@@ -115,6 +115,21 @@ func TestFleetAgentDomain(t *testing.T) {
 		t.Errorf("agent create with model flags failed: %s", out)
 	}
 
+	// Create with LFM model preset alias resolution (sndbx-q46)
+	code, out, _ = runFleet([]string{"agent", "create", "my-lfm-agent", "as", "opencode", "--model-name", "lfm-3b", "--model-url", "http://localhost:11434/v1"})
+	if code != 0 || !strings.Contains(out, "created successfully") || !strings.Contains(out, "liquid/lfm-3b-instruct") {
+		t.Errorf("agent create with lfm-3b preset failed: %s", out)
+	}
+
+	// Verify persisted agent config has resolved canonical model name
+	lfmAgentCfg, err := config.LoadAgentConfig("my-lfm-agent", config.GetPaths())
+	if err != nil {
+		t.Fatalf("failed to load agent config for my-lfm-agent: %v", err)
+	}
+	if lfmAgentCfg.ModelName != "liquid/lfm-3b-instruct" {
+		t.Errorf("expected persisted model_name 'liquid/lfm-3b-instruct', got %q", lfmAgentCfg.ModelName)
+	}
+
 	// List
 	code, out, _ = runFleet([]string{"agent", "list"})
 	if code != 0 || !strings.Contains(out, "coder-1") || !strings.Contains(out, "coder-2") {

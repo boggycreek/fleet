@@ -94,8 +94,8 @@ func handleAgent(ctx context.Context, paths config.Paths, args []string, stdout,
 		fmt.Fprintf(stdout, `Usage: %s agent <command> [args...]
 
 Commands:
-  create <name> [as <type|oci>] [--image <type|oci>] [--role <role>] [--host] [--no-container] [--baremetal --ssh-host <host>] [--pwd <path>] [--model-url <url>] [--model-name <name>] [--model-key <key>]
-    Provision a new named agent (container sandbox, host-connected container with --host, no-container with --no-container, or baremetal physical machine with --baremetal).
+  create <name> [as <type|oci>] [--image <type|oci>] [--role <role>] [--host] [--no-container] [--baremetal --ssh-host <host>] [--pwd <path>] [--model-url <url>] [--model-name <name|preset>] [--model-key <key>]
+    Provision a new named agent (container sandbox, host-connected container with --host, no-container with --no-container, or baremetal physical machine with --baremetal). Supports model presets (lfm-3b, lfm-7b, lfm-40b-moe).
 
   provision <name>
     Provision or re-provision agent infrastructure, keys, Valkey ACLs, Forgejo accounts, and SonarQube credentials.
@@ -232,7 +232,7 @@ func handleAgentCreate(ctx context.Context, paths config.Paths, args []string, s
 	fs.StringVar(&engineType, "engine", "fleet-agent", "Cognitive engine harness for custom composed image (default, claude, opencode, pig, agy)")
 	fs.StringVar(&role, "role", "coding-agent", "Role metadata description")
 	fs.StringVar(&modelURL, "model-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI-compatible inference endpoint URL")
-	fs.StringVar(&modelName, "model-name", os.Getenv("OPENAI_MODEL"), "Target model name")
+	fs.StringVar(&modelName, "model-name", os.Getenv("OPENAI_MODEL"), "Target model name or preset (lfm-3b, lfm-7b, lfm-40b-moe)")
 	fs.StringVar(&modelKey, "model-key", os.Getenv("OPENAI_API_KEY"), "Model API key (optional)")
 	fs.StringVar(&modelKey, "model-api-key", os.Getenv("OPENAI_API_KEY"), "Model API key (optional)")
 	fs.BoolVar(&usePod, "pod", usePod, "Co-locate agent and sidecars in a Podman pod (ADR 00053)")
