@@ -91,6 +91,9 @@ func DiagnoseAndHealAgent(ctx context.Context, agentName string, paths config.Pa
 	// 10. Backplane Profile Check & Heal
 	checkAndHealBPProfile(ctx, cfg, paths, report)
 
+	// 11. Model Gateway Reachability Check
+	checkModelGateway(ctx, cfg, report)
+
 	return report, nil
 }
 
