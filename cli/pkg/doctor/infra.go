@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/boggycreek/fleet/cli/pkg/config"
 	"github.com/boggycreek/fleet/cli/pkg/runtime"
@@ -49,7 +50,49 @@ func DiagnoseAndHealInfra(ctx context.Context, paths config.Paths) (*DoctorRepor
 	// 9. Local LLM Host Inference Gateway / Slots
 	checkLocalInferenceSlots(ctx, report)
 
+	// 10. Local Model Gateways
+	checkLocalModelGateways(ctx, report)
+
 	return report, nil
+}
+
+func checkLocalModelGateways(ctx context.Context, report *DoctorReport) {
+	results := ProbeWellKnownGateways(ctx)
+
+	var healthy []*GatewayProbeResult
+	for _, r := range results {
+		if r != nil && r.Reachable {
+			healthy = append(healthy, r)
+		}
+	}
+
+	if len(healthy) == 0 {
+		report.Checks = append(report.Checks, CheckItem{
+			Name:    "Local Model Gateways",
+			Status:  StatusOK,
+			Message: "INFO: No local LLM inference engines detected on default ports",
+		})
+		return
+	}
+
+	for _, h := range healthy {
+		modelCount := len(h.Models)
+		var modelDesc string
+		if modelCount == 1 {
+			modelDesc = "1 active model"
+		} else {
+			modelDesc = fmt.Sprintf("%d active models", modelCount)
+		}
+		if modelCount > 0 {
+			modelDesc = fmt.Sprintf("%s: %s", modelDesc, strings.Join(h.Models, ", "))
+		}
+		msg := fmt.Sprintf("Local %s engine healthy at %s (%s)", h.Engine, h.URL, modelDesc)
+		report.Checks = append(report.Checks, CheckItem{
+			Name:    "Local Model Gateways",
+			Status:  StatusOK,
+			Message: msg,
+		})
+	}
 }
 
 func checkAndHealInfraEnv(paths config.Paths, report *DoctorReport) {
