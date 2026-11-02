@@ -1122,6 +1122,131 @@ func TestStartOpenRouterContainer(t *testing.T) {
 	restoreFail()
 }
 
+func TestDetectTLSDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. When no certs exist
+	paths := config.Paths{
+		DataHome: filepath.Join(tmpDir, "data"),
+	}
+	t.Setenv("FLEET_TLS_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "config"))
+
+	dir, enabled := DetectTLSDir(paths)
+	if enabled || dir != "" {
+		t.Errorf("expected no TLS detected, got %q (enabled=%v)", dir, enabled)
+	}
+
+	// 2. Incomplete certs (missing ca.crt)
+	tlsDir := filepath.Join(tmpDir, "tls")
+	_ = os.MkdirAll(tlsDir, 0700)
+	_ = os.WriteFile(filepath.Join(tlsDir, "server.crt"), []byte("cert"), 0600)
+	_ = os.WriteFile(filepath.Join(tlsDir, "server.key"), []byte("key"), 0600)
+	t.Setenv("FLEET_TLS_DIR", tlsDir)
+
+	dir, enabled = DetectTLSDir(paths)
+	if enabled || dir != "" {
+		t.Errorf("expected no TLS detected for partial files, got %q (enabled=%v)", dir, enabled)
+	}
+
+	// 3. Complete certs via FLEET_TLS_DIR
+	_ = os.WriteFile(filepath.Join(tlsDir, "ca.crt"), []byte("ca"), 0600)
+	dir, enabled = DetectTLSDir(paths)
+	if !enabled || dir != tlsDir {
+		t.Errorf("expected TLS detected at %q, got %q (enabled=%v)", tlsDir, dir, enabled)
+	}
+
+	// 4. Complete certs via XDG_CONFIG_HOME/fleet/tls
+	t.Setenv("FLEET_TLS_DIR", "")
+	xdgTLS := filepath.Join(tmpDir, "config", "fleet", "tls")
+	_ = os.MkdirAll(xdgTLS, 0700)
+	_ = os.WriteFile(filepath.Join(xdgTLS, "server.crt"), []byte("cert"), 0600)
+	_ = os.WriteFile(filepath.Join(xdgTLS, "server.key"), []byte("key"), 0600)
+	_ = os.WriteFile(filepath.Join(xdgTLS, "ca.crt"), []byte("ca"), 0600)
+
+	dir, enabled = DetectTLSDir(paths)
+	if !enabled || dir != xdgTLS {
+		t.Errorf("expected TLS detected at %q, got %q (enabled=%v)", xdgTLS, dir, enabled)
+	}
+
+	// 5. Complete certs via paths.DataHome/tls
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "empty-config"))
+	dataTLS := filepath.Join(paths.DataHome, "tls")
+	_ = os.MkdirAll(dataTLS, 0700)
+	_ = os.WriteFile(filepath.Join(dataTLS, "server.crt"), []byte("cert"), 0600)
+	_ = os.WriteFile(filepath.Join(dataTLS, "server.key"), []byte("key"), 0600)
+	_ = os.WriteFile(filepath.Join(dataTLS, "ca.crt"), []byte("ca"), 0600)
+
+	dir, enabled = DetectTLSDir(paths)
+	if !enabled || dir != dataTLS {
+		t.Errorf("expected TLS detected at %q, got %q (enabled=%v)", dataTLS, dir, enabled)
+	}
+}
+
+func TestBuildValkeyGuardArgs_WithAndWithoutTLS(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := config.Paths{
+		DataHome: filepath.Join(tmpDir, "data"),
+	}
+
+	// 1. Without TLS
+	t.Setenv("FLEET_TLS_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "config"))
+	args := buildValkeyGuardArgs(paths, "fleet-infra", "6379", "fleet-valkey", "fleet-valkey-guard")
+
+	argStr := strings.Join(args, " ")
+	if strings.Contains(argStr, "VALKEY_GUARD_TLS_LISTEN") {
+		t.Errorf("expected no TLS flags in args without certs, got: %v", args)
+	}
+	if strings.Contains(argStr, ":6380:6380") {
+		t.Errorf("expected port 6380 not published without certs, got: %v", args)
+	}
+	if !strings.Contains(argStr, "-p 127.0.0.1:6379:6379") {
+		t.Errorf("expected port 6379 published, got: %v", args)
+	}
+
+	// 2. With TLS present
+	tlsDir := filepath.Join(tmpDir, "tls")
+	_ = os.MkdirAll(tlsDir, 0700)
+	_ = os.WriteFile(filepath.Join(tlsDir, "server.crt"), []byte("cert"), 0600)
+	_ = os.WriteFile(filepath.Join(tlsDir, "server.key"), []byte("key"), 0600)
+	_ = os.WriteFile(filepath.Join(tlsDir, "ca.crt"), []byte("ca"), 0600)
+	t.Setenv("FLEET_TLS_DIR", tlsDir)
+	t.Setenv("FLEET_BIND_INTERFACE", "0.0.0.0")
+
+	argsTLS := buildValkeyGuardArgs(paths, "fleet-infra", "6379", "fleet-valkey", "fleet-valkey-guard")
+	argTLSStr := strings.Join(argsTLS, " ")
+
+	if !strings.Contains(argTLSStr, "-p 0.0.0.0:6380:6380") {
+		t.Errorf("expected port 6380 published on configured interface, got: %v", argsTLS)
+	}
+	expectedMount := fmt.Sprintf("-v %s:/etc/fleet/tls:ro,z", tlsDir)
+	if !strings.Contains(argTLSStr, expectedMount) {
+		t.Errorf("expected TLS directory mount %q, got: %v", expectedMount, argsTLS)
+	}
+	if !strings.Contains(argTLSStr, "-e VALKEY_GUARD_TLS_LISTEN=:6380") {
+		t.Errorf("expected VALKEY_GUARD_TLS_LISTEN=:6380, got: %v", argsTLS)
+	}
+	if !strings.Contains(argTLSStr, "-e VALKEY_GUARD_TLS_CERT=/etc/fleet/tls/server.crt") {
+		t.Errorf("expected VALKEY_GUARD_TLS_CERT, got: %v", argsTLS)
+	}
+	if !strings.Contains(argTLSStr, "-e VALKEY_GUARD_TLS_KEY=/etc/fleet/tls/server.key") {
+		t.Errorf("expected VALKEY_GUARD_TLS_KEY, got: %v", argsTLS)
+	}
+	if !strings.Contains(argTLSStr, "-e VALKEY_GUARD_TLS_CLIENT_CA=/etc/fleet/tls/ca.crt") {
+		t.Errorf("expected VALKEY_GUARD_TLS_CLIENT_CA, got: %v", argsTLS)
+	}
+
+	// Also test VALKEY_GUARD_BIND fallback
+	t.Setenv("FLEET_BIND_INTERFACE", "")
+	t.Setenv("VALKEY_GUARD_BIND", "192.168.1.50")
+	argsBind := buildValkeyGuardArgs(paths, "fleet-infra", "6379", "fleet-valkey", "fleet-valkey-guard")
+	argBindStr := strings.Join(argsBind, " ")
+	if !strings.Contains(argBindStr, "-p 192.168.1.50:6380:6380") {
+		t.Errorf("expected VALKEY_GUARD_BIND applied, got: %v", argsBind)
+	}
+}
+
 func TestInfraContainerSettersForTest(t *testing.T) {
 	r1 := SetInfraNetworkForTest("test-net")
 	r1()

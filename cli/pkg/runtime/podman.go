@@ -98,6 +98,92 @@ func SetInfraOpenRouterContainerForTest(name string) func() {
 	}
 }
 
+// DetectTLSDir checks if host TLS certificates exist for mutual TLS authentication.
+// It searches in:
+// 1. FLEET_TLS_DIR environment variable
+// 2. ~/.config/fleet/tls (or $XDG_CONFIG_HOME/fleet/tls)
+// 3. filepath.Join(paths.DataHome, "tls")
+// Returns the directory path and true if server.crt, server.key, and ca.crt all exist.
+func DetectTLSDir(paths config.Paths) (string, bool) {
+	var candidates []string
+	if envDir := strings.TrimSpace(os.Getenv("FLEET_TLS_DIR")); envDir != "" {
+		candidates = append(candidates, envDir)
+	}
+
+	home, _ := os.UserHomeDir()
+	xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	if xdgConfig == "" && home != "" {
+		xdgConfig = filepath.Join(home, ".config")
+	}
+	if xdgConfig != "" {
+		candidates = append(candidates, filepath.Join(xdgConfig, "fleet", "tls"))
+	}
+	if home != "" {
+		candidates = append(candidates, filepath.Join(home, ".config", "fleet", "tls"))
+	}
+	if paths.DataHome != "" {
+		candidates = append(candidates, filepath.Join(paths.DataHome, "tls"))
+	}
+
+	seen := make(map[string]bool)
+	for _, dir := range candidates {
+		clean := filepath.Clean(dir)
+		if seen[clean] {
+			continue
+		}
+		seen[clean] = true
+
+		serverCrt := filepath.Join(clean, "server.crt")
+		serverKey := filepath.Join(clean, "server.key")
+		caCrt := filepath.Join(clean, "ca.crt")
+
+		if fi, err := os.Stat(serverCrt); err == nil && !fi.IsDir() {
+			if fi, err := os.Stat(serverKey); err == nil && !fi.IsDir() {
+				if fi, err := os.Stat(caCrt); err == nil && !fi.IsDir() {
+					return clean, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func buildValkeyGuardArgs(paths config.Paths, netName, valkeyPort, valkeyContainer, valkeyGuardContainer string) []string {
+	args := []string{
+		"run", "-d",
+		"--name", valkeyGuardContainer,
+		"--hostname", valkeyGuardContainer,
+		"--network", netName,
+		"--network-alias", "valkey-guard",
+		"--network-alias", "valkey",
+		"-p", fmt.Sprintf("127.0.0.1:%s:6379", valkeyPort),
+	}
+
+	tlsDir, hasTLS := DetectTLSDir(paths)
+	if hasTLS {
+		bindHost := "127.0.0.1"
+		if envBind := strings.TrimSpace(os.Getenv("FLEET_BIND_INTERFACE")); envBind != "" {
+			bindHost = envBind
+		} else if envBind := strings.TrimSpace(os.Getenv("VALKEY_GUARD_BIND")); envBind != "" {
+			bindHost = envBind
+		}
+		args = append(args,
+			"-p", fmt.Sprintf("%s:6380:6380", bindHost),
+			"-v", fmt.Sprintf("%s:/etc/fleet/tls:ro,z", tlsDir),
+			"-e", "VALKEY_GUARD_TLS_LISTEN=:6380",
+			"-e", "VALKEY_GUARD_TLS_CERT=/etc/fleet/tls/server.crt",
+			"-e", "VALKEY_GUARD_TLS_KEY=/etc/fleet/tls/server.key",
+			"-e", "VALKEY_GUARD_TLS_CLIENT_CA=/etc/fleet/tls/ca.crt",
+		)
+	}
+
+	args = append(args,
+		"-e", fmt.Sprintf("VALKEY_GUARD_TARGET=%s:6379", valkeyContainer),
+		"fleet-valkey-guard:latest",
+	)
+	return args
+}
+
 // ContainerMount describes a mount on a container.
 type ContainerMount struct {
 	Type        string `json:"Type"`
@@ -1094,17 +1180,7 @@ user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~sp
 
 	// 1b. Start Valkey Guard proxy container
 	valkeyGuardContainer := infraValkeyGuardContainer
-	valkeyGuardArgs := []string{
-		"run", "-d",
-		"--name", valkeyGuardContainer,
-		"--hostname", valkeyGuardContainer,
-		"--network", netName,
-		"--network-alias", "valkey-guard",
-		"--network-alias", "valkey",
-		"-p", fmt.Sprintf("127.0.0.1:%s:6379", valkeyPort),
-		"-e", fmt.Sprintf("VALKEY_GUARD_TARGET=%s:6379", valkeyContainer),
-		"fleet-valkey-guard:latest",
-	}
+	valkeyGuardArgs := buildValkeyGuardArgs(paths, netName, valkeyPort, valkeyContainer, valkeyGuardContainer)
 
 	checkValkeyGuard := CommandContext(ctx, "podman", "container", "exists", valkeyGuardContainer)
 	if err := checkValkeyGuard.Run(); err != nil {
@@ -1736,17 +1812,7 @@ user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~sp
 	}
 
 	valkeyGuardContainer := infraValkeyGuardContainer
-	valkeyGuardArgs := []string{
-		"run", "-d",
-		"--name", valkeyGuardContainer,
-		"--hostname", valkeyGuardContainer,
-		"--network", netName,
-		"--network-alias", "valkey-guard",
-		"--network-alias", "valkey",
-		"-p", fmt.Sprintf("127.0.0.1:%s:6379", valkeyPort),
-		"-e", fmt.Sprintf("VALKEY_GUARD_TARGET=%s:6379", valkeyContainer),
-		"fleet-valkey-guard:latest",
-	}
+	valkeyGuardArgs := buildValkeyGuardArgs(paths, netName, valkeyPort, valkeyContainer, valkeyGuardContainer)
 
 	_ = CommandContext(ctx, "podman", "rm", "-f", valkeyGuardContainer).Run()
 
