@@ -13,7 +13,6 @@ This directory contains empirical research spikes, benchmark reports, and explor
 | **[FreeBSD Host Support](freebsd-host-support.md)** | Host OS Compatibility | FreeBSD 14.x/15.x host compatibility, bhyve microVMs, ZFS dataset volumes, and pf.conf anchor networking. |
 | **[Multi-Machine Network Federation](multi-machine-network-federation.md)** | LAN Networking | Multi-machine local network Fleet deployment, federated backplane relaying, and gateway DNS resolution. |
 | **[NVIDIA OpenShell Evaluation](nvidia-openshell-evaluation.md)** | Sandboxing | Comparative analysis of NVIDIA OpenShell container sandboxing vs. Podman rootless isolation. |
-| **[Valkey Stream Guard Evaluation](valkey-stream-guard-evaluation.md)** | Stream Security | Security evaluation of Valkey stream consumer groups and ACL enforcement. |
 
 ---
 

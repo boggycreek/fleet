@@ -41,7 +41,6 @@ Empirical research spikes, benchmarks, and exploratory evaluations covering loca
 - **[FreeBSD Host Support & Runtime Porting Guide](evaluations/freebsd-host-support.md)**
 - **[Multi-Machine Local Network Federation & Gateway DNS](evaluations/multi-machine-network-federation.md)**
 - **[NVIDIA OpenShell Evaluation](evaluations/nvidia-openshell-evaluation.md)**
-- **[Valkey Stream Guard Evaluation](evaluations/valkey-stream-guard-evaluation.md)**
 
 ### 4. [Security Audits & Quality Findings](audits/README.md) (`doc/ai/audits/`)
 Adversarial security audits, vulnerability assessments, and protocol hardening records across Fleet subsystems:
