@@ -31,8 +31,18 @@ func TestGetInfraInfo_Masked(t *testing.T) {
 		t.Fatalf("GetInfraInfo failed: %v", err)
 	}
 
-	if info.Valkey == nil || info.Forgejo == nil || info.PostgreSQL == nil || info.SonarQube == nil || info.OpenRouter == nil {
+	if info.ValkeyGuard == nil || info.Valkey == nil || info.Forgejo == nil || info.PostgreSQL == nil || info.SonarQube == nil || info.OpenRouter == nil {
 		t.Fatalf("expected all service structs to be non-nil")
+	}
+
+	if info.ValkeyGuard.Container != "fleet-valkey-guard" {
+		t.Errorf("expected valkey-guard container name, got %s", info.ValkeyGuard.Container)
+	}
+	if info.ValkeyGuard.Target != "fleet-valkey:6379" {
+		t.Errorf("expected valkey-guard target fleet-valkey:6379, got %s", info.ValkeyGuard.Target)
+	}
+	if info.ValkeyGuard.HostPort != "127.0.0.1:6380" {
+		t.Errorf("expected valkey-guard host port 127.0.0.1:6380, got %s", info.ValkeyGuard.HostPort)
 	}
 
 	if info.OpenRouter.InternalURL != "http://fleet-openrouter:8080/v1" {
@@ -184,10 +194,17 @@ func TestGetInfraInfo_DefaultsAndFallbacks(t *testing.T) {
 
 func TestFormatInfraInfo_Alignment(t *testing.T) {
 	info := &InfraStackInfo{
+		ValkeyGuard: &ValkeyGuardInfraInfo{
+			Status:           "running",
+			Container:        "fleet-valkey-guard",
+			InternalEndpoint: "valkey-guard:6379",
+			HostPort:         "127.0.0.1:6379",
+			Target:           "fleet-valkey:6379",
+		},
 		Valkey: &ValkeyInfraInfo{
 			Status:           "running",
 			Container:        "fleet-valkey",
-			InternalEndpoint: "valkey:6379",
+			InternalEndpoint: "fleet-valkey:6379",
 			HostPort:         "127.0.0.1:6379",
 			ConnectionURL:    "valkey://human:********@127.0.0.1:6379",
 			CLICommand:       "valkey-cli -h 127.0.0.1 -p 6379",
@@ -235,7 +252,7 @@ func TestFormatInfraInfo_Alignment(t *testing.T) {
 
 	formatted := FormatInfraInfo(info)
 
-	if !strings.Contains(formatted, "[valkey]") || !strings.Contains(formatted, "[forgejo]") ||
+	if !strings.Contains(formatted, "[valkey-guard]") || !strings.Contains(formatted, "[valkey]") || !strings.Contains(formatted, "[forgejo]") ||
 		!strings.Contains(formatted, "[postgresql]") || !strings.Contains(formatted, "[sonarqube]") ||
 		!strings.Contains(formatted, "[openrouter]") {
 		t.Fatalf("missing expected section header in formatted output:\n%s", formatted)

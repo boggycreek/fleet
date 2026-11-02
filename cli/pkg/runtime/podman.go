@@ -31,13 +31,14 @@ const EgressImage = "fleet-egress:latest"
 // infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, and infraSonarContainer are the expected shared infra container names.
 // These are package-level vars so tests can override them with ephemeral container names.
 var (
-	infraValkeyContainer     = "fleet-valkey"
-	infraForgejoContainer    = "fleet-forgejo"
-	infraGiteaContainer      = infraForgejoContainer
-	infraPostgresContainer   = "fleet-postgres"
-	infraSonarContainer      = "fleet-sonarqube"
-	infraOpenRouterContainer = "fleet-openrouter"
-	infraNetwork             = "fleet-infra"
+	infraValkeyContainer      = "fleet-valkey"
+	infraValkeyGuardContainer = "fleet-valkey-guard"
+	infraForgejoContainer     = "fleet-forgejo"
+	infraGiteaContainer       = infraForgejoContainer
+	infraPostgresContainer    = "fleet-postgres"
+	infraSonarContainer       = "fleet-sonarqube"
+	infraOpenRouterContainer  = "fleet-openrouter"
+	infraNetwork              = "fleet-infra"
 )
 
 // SetInfraNetworkForTest overrides infraNetwork for unit testing.
@@ -55,6 +56,15 @@ func SetInfraValkeyContainerForTest(name string) func() {
 	infraValkeyContainer = name
 	return func() {
 		infraValkeyContainer = orig
+	}
+}
+
+// SetInfraValkeyGuardContainerForTest overrides infraValkeyGuardContainer for unit testing.
+func SetInfraValkeyGuardContainerForTest(name string) func() {
+	orig := infraValkeyGuardContainer
+	infraValkeyGuardContainer = name
+	return func() {
+		infraValkeyGuardContainer = orig
 	}
 }
 
@@ -539,7 +549,7 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 
 	containerBPHost := bpHost
 	if containerBPHost == "localhost" || containerBPHost == "127.0.0.1" || containerBPHost == "::1" || containerBPHost == "" {
-		containerBPHost = infraValkeyContainer
+		containerBPHost = infraValkeyGuardContainer
 	}
 
 	var args []string
@@ -701,7 +711,7 @@ func startHostAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths
 
 	containerBPHost := bpHost
 	if containerBPHost == "localhost" || containerBPHost == "127.0.0.1" || containerBPHost == "::1" || containerBPHost == "" {
-		containerBPHost = infraValkeyContainer
+		containerBPHost = infraValkeyGuardContainer
 	}
 
 	isLocalModelURL := func(murl string) bool {
@@ -1029,9 +1039,8 @@ user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~sp
 	valkeyArgs := []string{
 		"run", "-d",
 		"--name", valkeyContainer,
-		"--hostname", "valkey",
+		"--hostname", valkeyContainer,
 		"--network", netName,
-		"-p", fmt.Sprintf("127.0.0.1:%s:6379", valkeyPort),
 		"-v", fmt.Sprintf("%s:/etc/valkey:z", valkeyConfigDir),
 		"-v", fmt.Sprintf("%s:/data:z", valkeyVol),
 		"docker.io/valkey/valkey:8.0-alpine",
@@ -1079,6 +1088,48 @@ user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~sp
 				if out, err := cmd.CombinedOutput(); err != nil {
 					return fmt.Errorf("failed restarting valkey container: %v (%s)", err, string(out))
 				}
+			}
+		}
+	}
+
+	// 1b. Start Valkey Guard proxy container
+	valkeyGuardContainer := infraValkeyGuardContainer
+	valkeyGuardArgs := []string{
+		"run", "-d",
+		"--name", valkeyGuardContainer,
+		"--hostname", valkeyGuardContainer,
+		"--network", netName,
+		"--network-alias", "valkey-guard",
+		"--network-alias", "valkey",
+		"-p", fmt.Sprintf("127.0.0.1:%s:6379", valkeyPort),
+		"-e", fmt.Sprintf("VALKEY_GUARD_TARGET=%s:6379", valkeyContainer),
+		"fleet-valkey-guard:latest",
+	}
+
+	checkValkeyGuard := CommandContext(ctx, "podman", "container", "exists", valkeyGuardContainer)
+	if err := checkValkeyGuard.Run(); err != nil {
+		cmd := CommandContext(ctx, "podman", valkeyGuardArgs...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			if IsRootlessNetnsError(err, out) {
+				_ = EnsureRootlessNetNS(ctx)
+				retryCmd := CommandContext(ctx, "podman", valkeyGuardArgs...)
+				if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
+					return fmt.Errorf("failed starting valkey-guard container: %v (%s)", retryErr, string(retryOut))
+				}
+			} else {
+				return fmt.Errorf("failed starting valkey-guard container: %v (%s)", err, string(out))
+			}
+		}
+	} else {
+		startCmd := CommandContext(ctx, "podman", "start", valkeyGuardContainer)
+		if startOut, err := startCmd.CombinedOutput(); err != nil {
+			_ = CommandContext(ctx, "podman", "rm", "-f", valkeyGuardContainer).Run()
+			if IsRootlessNetnsError(err, startOut) {
+				_ = EnsureRootlessNetNS(ctx)
+			}
+			cmd := CommandContext(ctx, "podman", valkeyGuardArgs...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed restarting valkey-guard container: %v (%s)", err, string(out))
 			}
 		}
 	}
@@ -1434,6 +1485,7 @@ func BootstrapSonar(ctx context.Context, adminPass string) error {
 
 // StopInfraStack halts shared infrastructure containers
 func StopInfraStack(ctx context.Context) error {
+	_ = CommandContext(ctx, "podman", "stop", infraValkeyGuardContainer).Run()
 	_ = CommandContext(ctx, "podman", "stop", infraValkeyContainer).Run()
 	_ = CommandContext(ctx, "podman", "stop", infraForgejoContainer).Run()
 	_ = CommandContext(ctx, "podman", "stop", "agent-sandbox-gitea").Run()
@@ -1445,7 +1497,7 @@ func StopInfraStack(ctx context.Context) error {
 
 // InspectInfraStack returns the runtime state of Valkey, Forgejo, PostgreSQL, and SonarQube containers
 func InspectInfraStack(ctx context.Context) ([]ContainerInfo, error) {
-	containers := []string{infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, infraSonarContainer, infraOpenRouterContainer}
+	containers := []string{infraValkeyGuardContainer, infraValkeyContainer, infraForgejoContainer, infraPostgresContainer, infraSonarContainer, infraOpenRouterContainer}
 	var results []ContainerInfo
 	for _, c := range containers {
 		info, err := InspectAgentContainer(ctx, c)
@@ -1660,9 +1712,8 @@ user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~sp
 	valkeyArgs := []string{
 		"run", "-d",
 		"--name", valkeyContainer,
-		"--hostname", "valkey",
+		"--hostname", valkeyContainer,
 		"--network", netName,
-		"-p", fmt.Sprintf("127.0.0.1:%s:6379", valkeyPort),
 		"-v", fmt.Sprintf("%s:/etc/valkey:z", valkeyConfigDir),
 		"-v", fmt.Sprintf("%s:/data:z", valkeyVol),
 		"docker.io/valkey/valkey:8.0-alpine",
@@ -1681,6 +1732,34 @@ user %s on >%s ~%s:* ~human:name ~liaison:current ~poll-interval ~identity:* ~sp
 			}
 		} else {
 			return fmt.Errorf("failed starting valkey container: %v (%s)", err, string(out))
+		}
+	}
+
+	valkeyGuardContainer := infraValkeyGuardContainer
+	valkeyGuardArgs := []string{
+		"run", "-d",
+		"--name", valkeyGuardContainer,
+		"--hostname", valkeyGuardContainer,
+		"--network", netName,
+		"--network-alias", "valkey-guard",
+		"--network-alias", "valkey",
+		"-p", fmt.Sprintf("127.0.0.1:%s:6379", valkeyPort),
+		"-e", fmt.Sprintf("VALKEY_GUARD_TARGET=%s:6379", valkeyContainer),
+		"fleet-valkey-guard:latest",
+	}
+
+	_ = CommandContext(ctx, "podman", "rm", "-f", valkeyGuardContainer).Run()
+
+	guardCmd := CommandContext(ctx, "podman", valkeyGuardArgs...)
+	if out, err := guardCmd.CombinedOutput(); err != nil {
+		if IsRootlessNetnsError(err, out) {
+			_ = EnsureRootlessNetNS(ctx)
+			retryCmd := CommandContext(ctx, "podman", valkeyGuardArgs...)
+			if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
+				return fmt.Errorf("failed starting valkey-guard container: %v (%s)", retryErr, string(retryOut))
+			}
+		} else {
+			return fmt.Errorf("failed starting valkey-guard container: %v (%s)", err, string(out))
 		}
 	}
 	return nil

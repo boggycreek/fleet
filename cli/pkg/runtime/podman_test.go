@@ -1127,6 +1127,8 @@ func TestInfraContainerSettersForTest(t *testing.T) {
 	r1()
 	r2 := SetInfraValkeyContainerForTest("test-valkey")
 	r2()
+	r2b := SetInfraValkeyGuardContainerForTest("test-valkey-guard")
+	r2b()
 	r3 := SetInfraSonarContainerForTest("test-sonar")
 	r3()
 	r4 := SetInfraForgejoContainerForTest("test-forgejo")

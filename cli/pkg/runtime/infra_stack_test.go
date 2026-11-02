@@ -26,21 +26,25 @@ func TestStopInfraStack(t *testing.T) {
 
 	pid := os.Getpid()
 	testValkeyName := fmt.Sprintf("unit-test-valkey-stop-%d", pid)
+	testValkeyGuardName := fmt.Sprintf("unit-test-valkey-guard-stop-%d", pid)
 	testForgejoName := fmt.Sprintf("unit-test-forgejo-stop-%d", pid)
 	testPostgresName := fmt.Sprintf("unit-test-postgres-stop-%d", pid)
 	testSonarName := fmt.Sprintf("unit-test-sonar-stop-%d", pid)
 
 	origValkey := infraValkeyContainer
+	origValkeyGuard := infraValkeyGuardContainer
 	origForgejo := infraForgejoContainer
 	origPostgres := infraPostgresContainer
 	origSonar := infraSonarContainer
 	infraValkeyContainer = testValkeyName
+	infraValkeyGuardContainer = testValkeyGuardName
 	infraForgejoContainer = testForgejoName
 	infraGiteaContainer = testForgejoName
 	infraPostgresContainer = testPostgresName
 	infraSonarContainer = testSonarName
 	defer func() {
 		infraValkeyContainer = origValkey
+		infraValkeyGuardContainer = origValkeyGuard
 		infraForgejoContainer = origForgejo
 		infraGiteaContainer = origForgejo
 		infraPostgresContainer = origPostgres
@@ -55,6 +59,7 @@ func TestStopInfraStack(t *testing.T) {
 	}
 	defer func() {
 		_ = exec.Command("podman", "rm", "-f", testValkeyName).Run()
+		_ = exec.Command("podman", "rm", "-f", testValkeyGuardName).Run()
 		_ = exec.Command("podman", "rm", "-f", testForgejoName).Run()
 		_ = exec.Command("podman", "rm", "-f", testPostgresName).Run()
 		_ = exec.Command("podman", "rm", "-f", testSonarName).Run()
@@ -128,6 +133,46 @@ func TestInfraStackOrchestrationScenarios(t *testing.T) {
 	restore3()
 	if err == nil {
 		t.Errorf("expected error when valkey restart fails")
+	}
+
+	// 3b. Valkey Guard doesn't exist, run fails
+	mockValkeyGuardRunFail := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "podman" && len(args) > 1 && args[0] == "container" && args[1] == "exists" {
+			if strings.Contains(args[2], "valkey-guard") {
+				return exec.Command("false")
+			}
+			return exec.Command("true")
+		}
+		if name == "podman" && len(args) > 0 && args[0] == "run" && strings.Contains(args[3], "valkey-guard") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	restore3b := SetExecCommandContextForTesting(mockValkeyGuardRunFail)
+	err = StartInfraStack(ctx, paths, "p1", "p2", "u1")
+	restore3b()
+	if err == nil {
+		t.Errorf("expected error when valkey-guard run fails")
+	}
+
+	// 3c. Valkey Guard exists, start fails, restart fails
+	mockValkeyGuardRestartFail := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "podman" && len(args) > 1 && args[0] == "container" && args[1] == "exists" {
+			return exec.Command("true")
+		}
+		if name == "podman" && len(args) > 1 && args[0] == "start" && strings.Contains(args[1], "valkey-guard") {
+			return exec.Command("false")
+		}
+		if name == "podman" && len(args) > 0 && args[0] == "run" && strings.Contains(args[3], "valkey-guard") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	restore3c := SetExecCommandContextForTesting(mockValkeyGuardRestartFail)
+	err = StartInfraStack(ctx, paths, "p1", "p2", "u1")
+	restore3c()
+	if err == nil {
+		t.Errorf("expected error when valkey-guard restart fails")
 	}
 
 	// 4. Forgejo doesn't exist, run fails
@@ -304,9 +349,9 @@ func TestRecreateValkeyContainerScenarios(t *testing.T) {
 	}
 	restore1()
 
-	// 2. Podman run fails
+	// 2. Podman run fails on valkey
 	mockFailRun := func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if name == "podman" && len(args) > 0 && args[0] == "run" {
+		if name == "podman" && len(args) > 0 && args[0] == "run" && strings.Contains(strings.Join(args, " "), "valkey-server") {
 			return exec.Command("false")
 		}
 		return exec.Command("true")
@@ -316,6 +361,19 @@ func TestRecreateValkeyContainerScenarios(t *testing.T) {
 		t.Errorf("expected error when run fails")
 	}
 	restore2()
+
+	// 2b. Podman run fails on valkey-guard
+	mockFailGuardRun := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "podman" && len(args) > 0 && args[0] == "run" && strings.Contains(strings.Join(args, " "), "valkey-guard") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	restore2b := SetExecCommandContextForTesting(mockFailGuardRun)
+	if err := RecreateValkeyContainer(ctx, paths, "p1", "p2", "u1"); err == nil {
+		t.Errorf("expected error when guard run fails")
+	}
+	restore2b()
 
 	// 3. Podman run succeeds with empty credentials (fallback defaults)
 	mockSuccess := func(ctx context.Context, name string, args ...string) *exec.Cmd {
