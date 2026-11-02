@@ -215,4 +215,4 @@ Colibri includes a companion cluster mode (formerly Lumabri) for clustering memo
 ### Actionable Integration Plan for Fleet
 1. **Model Gateway Standard**: Standardize local developer workstation inference on **Qwen3-Coder-30B-A3B** and **Qwen3.6-35B-A3B** using `coli serve` as an alternative local engine alongside Ollama and llama.cpp.
 2. **System One Agent Integration**: Leverage `POST /v1/systemone` for agent workflow decisions (e.g., automated code review pass/fail classification) where prompt evaluation completes in <300ms without full token generation.
-3. **Host Service Deployment**: Document runbooks for running `coli serve` natively on host workstations, binding to port 8000, and mapping `http://llm-gateway:8000/v1` into Fleet Podman agent containers.
+3. **Host Service Deployment**: Document runbooks for running `coli serve` natively on host workstations, binding to port 8000, and mapping `http://llm-gateway:8000/v1` into Fleet Podman agent containers. Both `fleet agent doctor` and `fleet infra doctor` now actively probe port 8000 and verify local Colibri/vLLM model availability.

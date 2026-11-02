@@ -163,5 +163,5 @@ However, bundling or redistributing pre-compiled `exo` binaries inside Fleet ins
 | Phase | Task Description | Target Milestone |
 | :--- | :--- | :--- |
 | **Phase 1** | Document `exo` setup runbook for users wishing to pool LAN hardware in `doc/ai/distributed-inference-exo.md`. | Completed (This Document) |
-| **Phase 2** | Add diagnostic port probe in `fleet agent doctor` to verify response from local gateway ports (including `52415`). | Next Minor Release |
+| **Phase 2** | Add diagnostic port probe in `fleet agent doctor` to verify response from local gateway ports (including `52415`). | Completed (PR #246, PR #251) |
 | **Phase 3** | Re-evaluate `exo` core integration if project stabilizes, introduces native mTLS/Auth, and formalizes enterprise API contracts. | Future Backlog |
