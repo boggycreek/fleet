@@ -16,6 +16,15 @@ import (
 
 const secretMask = "********"
 
+// ValkeyGuardInfraInfo holds connection and wire guard proxy details.
+type ValkeyGuardInfraInfo struct {
+	Status           string `json:"status"`
+	Container        string `json:"container"`
+	InternalEndpoint string `json:"internal_endpoint"`
+	HostPort         string `json:"host_port"`
+	Target           string `json:"target"`
+}
+
 // ValkeyInfraInfo holds connection and credential details for Valkey.
 type ValkeyInfraInfo struct {
 	Status           string `json:"status"`
@@ -78,12 +87,13 @@ type OpenRouterInfraInfo struct {
 
 // InfraStackInfo holds the complete information for all shared infrastructure services.
 type InfraStackInfo struct {
-	Valkey     *ValkeyInfraInfo     `json:"valkey"`
-	Forgejo    *ForgejoInfraInfo    `json:"forgejo"`
-	Gitea      *ForgejoInfraInfo    `json:"gitea,omitempty"`
-	PostgreSQL *PostgresInfraInfo   `json:"postgresql"`
-	SonarQube  *SonarQubeInfraInfo  `json:"sonarqube"`
-	OpenRouter *OpenRouterInfraInfo `json:"openrouter"`
+	ValkeyGuard *ValkeyGuardInfraInfo `json:"valkey_guard,omitempty"`
+	Valkey      *ValkeyInfraInfo      `json:"valkey"`
+	Forgejo     *ForgejoInfraInfo     `json:"forgejo"`
+	Gitea       *ForgejoInfraInfo     `json:"gitea,omitempty"`
+	PostgreSQL  *PostgresInfraInfo    `json:"postgresql"`
+	SonarQube   *SonarQubeInfraInfo   `json:"sonarqube"`
+	OpenRouter  *OpenRouterInfraInfo  `json:"openrouter"`
 }
 
 type infoPair struct {
@@ -119,7 +129,7 @@ func GetInfraInfo(ctx context.Context, paths config.Paths, showSecrets bool) (*I
 		return "stopped"
 	}
 
-	// 1. Valkey
+	// 1. Valkey & Valkey Guard
 	valkeyPort := os.Getenv("BP_PORT")
 	if valkeyPort == "" {
 		valkeyPort = "6379"
@@ -142,10 +152,18 @@ func GetInfraInfo(ctx context.Context, paths config.Paths, showSecrets bool) (*I
 		valkeyDisplayPass = humanPass
 	}
 
+	valkeyGuardInfo := &ValkeyGuardInfraInfo{
+		Status:           getState(infraValkeyGuardContainer),
+		Container:        infraValkeyGuardContainer,
+		InternalEndpoint: fmt.Sprintf("valkey-guard:%s", valkeyPort),
+		HostPort:         fmt.Sprintf("127.0.0.1:%s", valkeyPort),
+		Target:           fmt.Sprintf("%s:6379", infraValkeyContainer),
+	}
+
 	valkeyInfo := &ValkeyInfraInfo{
 		Status:           getState(infraValkeyContainer),
 		Container:        infraValkeyContainer,
-		InternalEndpoint: fmt.Sprintf("valkey:%s", valkeyPort),
+		InternalEndpoint: fmt.Sprintf("%s:6379", infraValkeyContainer),
 		HostPort:         fmt.Sprintf("127.0.0.1:%s", valkeyPort),
 		ConnectionURL:    fmt.Sprintf("valkey://%s:%s@127.0.0.1:%s", humanUser, valkeyDisplayPass, valkeyPort),
 		CLICommand:       fmt.Sprintf("valkey-cli -h 127.0.0.1 -p %s -a %s", valkeyPort, valkeyDisplayPass),
@@ -271,12 +289,13 @@ func GetInfraInfo(ctx context.Context, paths config.Paths, showSecrets bool) (*I
 	}
 
 	return &InfraStackInfo{
-		Valkey:     valkeyInfo,
-		Forgejo:    forgejoInfo,
-		Gitea:      forgejoInfo,
-		PostgreSQL: postgresInfo,
-		SonarQube:  sonarInfo,
-		OpenRouter: openRouterInfo,
+		ValkeyGuard: valkeyGuardInfo,
+		Valkey:      valkeyInfo,
+		Forgejo:     forgejoInfo,
+		Gitea:       forgejoInfo,
+		PostgreSQL:  postgresInfo,
+		SonarQube:   sonarInfo,
+		OpenRouter:  openRouterInfo,
 	}, nil
 }
 
@@ -287,6 +306,19 @@ func FormatInfraInfo(info *InfraStackInfo) string {
 	}
 
 	var sections []infoSection
+
+	if info.ValkeyGuard != nil {
+		sections = append(sections, infoSection{
+			header: "[valkey-guard]",
+			pairs: []infoPair{
+				{"status", info.ValkeyGuard.Status},
+				{"container", info.ValkeyGuard.Container},
+				{"internal_endpoint", info.ValkeyGuard.InternalEndpoint},
+				{"host_port", info.ValkeyGuard.HostPort},
+				{"target", info.ValkeyGuard.Target},
+			},
+		})
+	}
 
 	if info.Valkey != nil {
 		sections = append(sections, infoSection{
