@@ -1,11 +1,11 @@
 ---
 adr: "00044"
-title: "Host Working Directory Projection and User ID Preservation"
+title: "Host Workspace Projection"
 topic: "Container Runtime & Storage"
 theme: "THEME-RUNTIME"
 status: "accepted"
 version: "v0.1.0-alpha"
-as_built: false
+as_built: true
 tags:
   - storage
   - volumes
@@ -16,11 +16,11 @@ tags:
 executive_summary: "Enables interactive host-connected agent containers to bind the operator's current working directory directly into /home/agent/workspace using Podman user namespace mapping (--userns=keep-id), ensuring zero file ownership or permission drift on the physical host."
 ---
 
-# 00044. Host Working Directory Projection and User ID Preservation
+# 00044. Host Workspace Projection
 
 ## Context
 
-[ADR 00005](00005-PersistedHomeVolumeAcrossRecreation.md) established named Podman volumes (`sndbx-agent-<name>-home`) mounted to `/home/agent` for persistent fleet sandboxes. This pattern isolates agent data within the container engine's storage pool, which is ideal for autonomous fleet workers checking out code from local Gitea repositories.
+[ADR 00005](00005-PersistedHomeVolumeAcrossRecreation.md) established named Podman volumes (`sndbx-agent-<name>-home`) mounted to `/home/agent` for persistent fleet sandboxes. This pattern isolates agent data within the container engine's storage pool, which is ideal for autonomous fleet workers checking out code from local Forgejo repositories.
 
 However, when an operator pairs with an interactive coding agent on an existing project located on the physical workstation, storing files inside an isolated named volume introduces severe friction:
 - Code must be artificially synchronized or pushed/pulled through git remotes between host and container.
@@ -32,7 +32,7 @@ Conversely, naively bind-mounting the host's working directory into a standard r
 
 ## Decision (What)
 
-We establish **Host Working Directory Projection** for interactive host-connected agent containers:
+We establish **Host Workspace Projection** for interactive host-connected agent containers:
 
 1. **Direct Workspace Mount**: The operator's current working directory (`pwd` or explicit `--pwd <path>`) is mounted directly to the container's workspace path using the shared SELinux volume flag (`:z`):
    ```

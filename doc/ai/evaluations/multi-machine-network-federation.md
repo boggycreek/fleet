@@ -27,7 +27,7 @@ In multi-machine environments, teams and single operators run heterogeneous phys
 
 ## 2. Valkey Topology Analysis
 
-Inter-agent communication and telemetry rely on Valkey Streams ([ADR 00042](../adr/00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md)). Scaling Valkey across physical nodes presents two principal architectural options:
+Inter-agent communication and telemetry rely on Valkey Streams ([ADR 00042](../adr/00042-UniversalBackplaneFabric.md)). Scaling Valkey across physical nodes presents two principal architectural options:
 
 ### Option A: Centralized Infrastructure Node (Primary Valkey Endpoint)
 
@@ -156,7 +156,7 @@ Exposing infrastructure services across a physical Local Area Network expands th
 
 2. **Preservation of Ed25519 End-to-End Signatures**:
    - Transport encryption (mTLS) protects LAN payload secrecy.
-   - Ed25519 payload signatures ([ADR 00042](../adr/00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md)) guarantee non-repudiable message authenticity and auditability regardless of intermediary network relays.
+   - Ed25519 payload signatures ([ADR 00042](../adr/00042-UniversalBackplaneFabric.md)) guarantee non-repudiable message authenticity and auditability regardless of intermediary network relays.
 
 3. **Perimeter Isolation Rules**:
    - Unauthenticated raw Valkey sockets (port `6379`) MUST NOT listen on physical LAN interfaces (`0.0.0.0`). Raw sockets remain bound strictly to `127.0.0.1` and container bridge interfaces (`fleet-infra`).
@@ -166,5 +166,5 @@ Exposing infrastructure services across a physical Local Area Network expands th
 
 ## Further Reading
 - [ADR 00035 — Host-Bridged Local LLM Inference Gateway](../adr/00035-HostBridgedLocalLlmInferenceGateway.md)
-- [ADR 00042 — Universal Cryptographic Backplane Fabric and Stateless Identity Profiles](../adr/00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md)
-- [ADR 00056 — Multi-Machine Local Network Fleet Pod Deployment and Federated Gateway DNS](../adr/00056-multi-machine-local-network-federation.md)
+- [ADR 00042 — Universal Backplane Fabric](../adr/00042-UniversalBackplaneFabric.md)
+- [ADR 00056 — Multi-Machine Local Network Fleet Pod Deployment and Federated Gateway DNS](../adr/00056-MultiMachineLocalNetworkFederation.md)

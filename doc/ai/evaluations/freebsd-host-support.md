@@ -16,7 +16,7 @@ This guide provides a comprehensive technical breakdown of FreeBSD host operatin
 
 ## 1. Architectural Runtime Models
 
-Fleet supports FreeBSD 14.x and 15.x hosts through a **hybrid dual-tier isolation model** (see [ADR 00058](../adr/00058-freebsd-host-support-strategy.md)):
+Fleet supports FreeBSD 14.x and 15.x hosts through a **hybrid dual-tier isolation model** (see [ADR 00058](../adr/00058-FreeBsdHostSupportStrategy.md)):
 
 | Workload Tier | Execution Mode | Container Engine / Isolation | Security & Parity Boundary |
 | :--- | :--- | :--- | :--- |

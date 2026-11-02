@@ -2,7 +2,7 @@
 
 This directory documents the foundational architectural decisions governing the **Agent Sandbox** system for the **v0.1.0-alpha** release.
 
-Records are numbered serially (`00001` through `00038`) and organized by topic domain to reflect the current **as-built** architecture. Each decision record includes machine-readable YAML front matter (with standardized thematic markers, tags, and executive summaries) for consumption by automated agents and tooling.
+Records are numbered serially (`00001` through `00060`) and organized by topic domain to reflect the current **as-built** architecture. Each decision record includes machine-readable YAML front matter (with standardized thematic markers, tags, and executive summaries) for consumption by automated agents and tooling.
 
 ---
 
@@ -36,7 +36,7 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Standardizes automated Go toolchain provisioning and multi-version management under the XDG Base Directory specification (`~/.local/share/go/sdk`), ensuring reproducible builds and quality gate execution across host environments without requiring root/sudo privileges or system-level modifications.
 - **[00047 — Project Rename from Sandbox to Fleet](00047-ProjectRenameFromSandboxToFleet.md)**  
   *Executive Summary:* Formally renames the project from Agent Sandbox ('sandbox', 'sndbx') to Fleet ('fleet', short alias 'ft'). As an alpha-stage project, this transition constitutes a clean break without backward compatibility shims. Migrates host CLI binary to 'fleet' (with 'ft' alias), in-container binary to 'fleet-agent', shared infrastructure containers/networks to 'fleet-*', host paths to ~/.local/share/fleet and ~/.ssh/fleet, SSH host aliases to fleet-<name>, and upstream GitHub repository to boggycreek/fleet. Supersedes ADR 00002.
-- **[00058 — FreeBSD Host Support Strategy, Container Isolation, and Port Runtime](00058-freebsd-host-support-strategy.md)**
+- **[00058 — FreeBSD Host Support Strategy, Container Isolation, and Port Runtime](00058-FreeBsdHostSupportStrategy.md)**
   *Executive Summary:* Evaluates FreeBSD 14.x/15.x host operating system support, comparing Linuxulator OCI execution, native FreeBSD jails, bhyve microVMs, and native host agent modes. Adopts a hybrid architecture deploying a bhyve Linux microVM for rootless OCI container parity alongside native GOOS=freebsd host CLI and agent binaries, backed by ZFS persistent storage and pf(4) firewall anchor integration.
 - **[00059 — Rename Sandbox Module to Cli and Modernize Go Module Paths](00059-RenameSandboxModuleToCliAndModernizeGoModulePaths.md)**
   *Executive Summary:* Completes the project renaming initiative by moving the host CLI module directory from sandbox/ to cli/, updating its Go module path to github.com/boggycreek/fleet/cli, modernizing all internal monorepo modules (agent, backplane, mcp) to github.com/boggycreek/fleet/*, and eliminating all legacy boggycreek/sandbox import paths.
@@ -54,7 +54,7 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Introduces PiG (Pi in Go) as a first-class derivative agent harness OCI image (`agent-sandbox-pig:latest`), integrating single-binary Go execution, non-root isolation, tmux session supervision, and native sndbx lifecycle preset management.
 - **[00043 — Base OCI Hierarchy](00043-BaseOciHierarchy.md)**  
   *Executive Summary:* Refactors the agent OCI image inheritance hierarchy into a neutral foundation (agent-sandbox-core) and two specialized intermediate base layers: daemon-base (providing background process supervision, SSH, and multiplexed sessions for fleet workers) and tool-base (providing direct, foreground CLI tool execution without daemon overhead for interactive pair programming). Supersedes ADR 00006.
-- **[00044 — Host Working Directory Projection and User ID Preservation](00044-HostWorkingDirectoryProjectionAndUserIdPreservation.md)**  
+- **[00044 — Host Workspace Projection](00044-HostWorkspaceProjection.md)**  
   *Executive Summary:* Enables interactive host-connected agent containers to bind the operator's current working directory directly into /home/agent/workspace using Podman user namespace mapping (--userns=keep-id), ensuring zero file ownership or permission drift on the physical host.
 - **[00045 — Node Version Manager (NVM) Scoped to Agent Persistent Home](00045-NodeVersionManagerInAgentHome.md)**  
   *Executive Summary:* Adopts Node Version Manager (NVM) scoped to the unprivileged agent's persistent home directory (/home/agent/.nvm) with the greatest LTS release pre-installed as default. Decoupled from OCI image creation, allowing the operator and agent to manage and switch Node versions dynamically without rebuilding OCI images. Supersedes ADR 00026.
@@ -84,8 +84,10 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* All backplane events and commands require cryptographic Ed25519 signatures verified against the sending agent's public key to guarantee authenticity.
 - **[00012 — libbp Core Client Library and Shared C ABI](00012-LibbpCoreClientLibraryAndCAbi.md)**  
   *Executive Summary:* Backplane IPC protocol logic is implemented in a native Go library (`libbp`) and planned for export as a shared C ABI (`libbp.so`) for polyglot agent runtimes.
-- **[00042 — Universal Cryptographic Backplane Fabric and Stateless Identity Profiles](00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md)**  
-  *Executive Summary:* Establishes a universal, topology-agnostic backplane communication fabric governed by non-repudiable cryptographic identity, strict capability-bounded message streams, and stateless connection profile resolution. Supersedes ADR 00010 and ADR 00011.
+- **[00042 — Universal Backplane Fabric](00042-UniversalBackplaneFabric.md)**  
+  *Executive Summary:* Establishes a universal, topology-agnostic backplane communication fabric governed by non-repudiable cryptographic identity, strict capability-bounded message streams, and Ed25519 digital signatures. Supersedes ADR 00010 and ADR 00011.
+- **[00060 — Stateless Connection Profiles](00060-StatelessConnectionProfiles.md)**  
+  *Executive Summary:* Eliminates mutable global session state and active identity pointer files by enforcing stateless, per-invocation backplane connection profile resolution via explicit CLI flags (`--profile`), scoped environment variables (`BP_PROFILE`), and isolated default profiles, guaranteeing race-free multi-agent and subagent execution.
 - **[00050 — Dev Container Security Screening, Diagnostics, and Privilege Escalation Sanitizer](00050-DevContainerSecurityScreeningAndPrivilegeEscalationSanitizer.md)**
   *Executive Summary:* Establishes automated static policy screening and sanitization for devcontainer.json configurations, proactively detecting and neutralizing privilege escalation vectors, forbidden capabilities, and dangerous host mounts before agent container instantiation.
 - **[00054 — Server-Side Valkey Stream Guard and Wire Inspection](00054-ServerSideValkeyStreamGuardWireInspection.md)**
@@ -100,7 +102,7 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* Runtime preflight hooks, transparent failure interception, and test cleanup routines validate directory permissions and reconcile desynchronized rootless network namespace mounts.
 - **[00053 — Evaluate Podman Pod Co-location for Agent and Sidecars](00053-PodmanPodCoLocationForAgentAndSidecars.md)**
   *Executive Summary:* Evaluates co-locating agent containers and companion sidecars inside rootless Podman pods sharing a single network namespace, comparing pod orchestration against standalone bridge-networked containers in terms of network egress isolation, lifecycle management, port mapping, and migration complexity.
-- **[00056 — Multi-Machine Local Network Fleet Pod Deployment and Federated Gateway DNS](00056-multi-machine-local-network-federation.md)**
+- **[00056 — Multi-Machine Local Network Fleet Pod Deployment and Federated Gateway DNS](00056-MultiMachineLocalNetworkFederation.md)**
   *Executive Summary:* Evaluates multi-machine physical host deployment, federated backplane bus access, and local network DNS resolution for multi-workstation Fleet clusters. Establishes a hybrid cross-host federation architecture featuring a phased Valkey relay topology, container-aware mDNS/CoreDNS host resolution, remote inference gateway routing, and mutual TLS (mTLS) transport security while preserving end-to-end Ed25519 message signatures.
 
 ### Developer Experience & IDE Ensembling (`THEME-DEVEXP`)
@@ -116,7 +118,7 @@ Records are numbered serially (`00001` through `00038`) and organized by topic d
   *Executive Summary:* IDE plugin lifecycles are governed strictly through `sndbx plugin <add|remove|list> <target>` without aliases or shorthand commands.
 - **[00020 — JetBrains Gateway vs. Toolbox Decoupling and Native SSH Sync](00020-JetBrainsGatewayVsToolboxDecouplingAndNativeSshSync.md)**  
   *Executive Summary:* Decouples IntelliJ Gateway plugins (`gateway`) from JetBrains Toolbox App integration (`toolbox`), synchronizing running sandboxes directly to Toolbox's native `ssh/settings.json` and inlined host blocks.
-- **[00057 — VS Code Remote-SSH Extension for Fleet Agent Management](00057-vscode-remote-ssh-extension.md)**
+- **[00057 — VS Code Remote-SSH Extension for Fleet Agent Management](00057-VsCodeRemoteSshExtension.md)**
   *Executive Summary:* Implements a lightweight host-side VS Code extension in `plugins/vscode` calling `fleet agent list --json` and triggering one-click Remote-SSH attach (`vscode://vscode-remote/ssh-remote+fleet-<name>/home/agent/workspace`).
 
 ### Shared Fleet Services (`THEME-FLEET`)

@@ -29,7 +29,7 @@ license that can be found in the LICENSE file.
 
 ## Context
 
-In Fleet's multi-agent architecture ([ADR 00042](00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md)), agent sandboxes and host-native cognitive processes communicate over a shared Valkey backplane message bus. Access isolation was originally governed by native Valkey ACL rules (e.g., `~<agent>:*` for private key-space and `~*:inbox` with `+xadd` for peer-to-peer messaging).
+In Fleet's multi-agent architecture ([ADR 00042](00042-UniversalBackplaneFabric.md)), agent sandboxes and host-native cognitive processes communicate over a shared Valkey backplane message bus. Access isolation was originally governed by native Valkey ACL rules (e.g., `~<agent>:*` for private key-space and `~*:inbox` with `+xadd` for peer-to-peer messaging).
 
 However, native Valkey ACLs operate strictly at the key and command level. They lack depth-aware argument and subargument inspection capabilities:
 1. **Unbounded Stream Growth (Memory Exhaustion DoS)**: Valkey ACLs cannot force `XADD` commands to include stream length bounds (`MAXLEN ~ 1000`). A rogue or compromised agent process can issue unconstrained `XADD` calls, leading to memory exhaustion on `fleet-valkey`.

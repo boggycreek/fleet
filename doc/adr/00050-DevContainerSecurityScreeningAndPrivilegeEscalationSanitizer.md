@@ -88,7 +88,7 @@ The validation pipeline enforces five core security rules:
 
 #### Rule 2: Enforce Non-Root Execution
 - **Policy**: All containers must execute under unprivileged user boundaries ([ADR 00004](00004-NonRootContainerUserAndPermissionBounds.md)).
-- **Action**: Intercepts `remoteUser: root` or `containerUser: root`. Forces `remoteUser: agent` (UID 1000) or maps host user ID (`keep-id` per [ADR 00044](00044-HostWorkingDirectoryProjectionAndUserIdPreservation.md)).
+- **Action**: Intercepts `remoteUser: root` or `containerUser: root`. Forces `remoteUser: agent` (UID 1000) or maps host user ID (`keep-id` per [ADR 00044](00044-HostWorkspaceProjection.md)).
 - **Severity**: `WARNING` (rewritten to `agent`).
 
 #### Rule 3: Deny Dangerous Linux Capabilities
@@ -108,7 +108,7 @@ The validation pipeline enforces five core security rules:
   - Host secret directories: `/home/*/.ssh`, `~/.aws`, `~/.kube`, `~/.gnupg`
   - Sensitive host system directories: `/etc/shadow`, `/etc/sudoers`, `/dev`, `/proc`, `/sys`, `/boot`
   - Direct host root filesystem binds: `/`
-- Enforces strict workspace projection bounds ([ADR 00044](00044-HostWorkingDirectoryProjectionAndUserIdPreservation.md)).
+- Enforces strict workspace projection bounds ([ADR 00044](00044-HostWorkspaceProjection.md)).
 - **Severity**: `ERROR` (forbidden mount point stripped).
 
 ---

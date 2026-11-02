@@ -40,7 +40,7 @@ We establish the **Composable Static Platform Artifact OCI Layer** (`fleet-artif
 The artifact layer packages all core Fleet in-container binaries into a flat or structured executable directory hierarchy:
 
 - **Core Fleet Executables**:
-  - `bp`: Backplane messaging and event CLI ([ADR 00010](00010-ValkeyPubSubMessagingAndAclIsolation.md), [ADR 00042](00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md)).
+  - `bp`: Backplane messaging and event CLI ([ADR 00010](00010-ValkeyPubSubMessagingAndAclIsolation.md), [ADR 00042](00042-UniversalBackplaneFabric.md)).
   - `bpd`: Backplane supervisor daemon ([ADR 00008](00008-BackplaneDaemonAsPrimaryEntrypoint.md), [ADR 00040](00040-DualLobeSingleIdentityAgentArchitecture.md)).
   - `bd`: Distributed task and dependency tracker (Beads, [ADR 00028](00028-InContainerFleetTaskCoordinationViaLocalGiteaBackedBeads.md)).
 - **Model Context Protocol (MCP) Suite** ([ADR 00032](00032-FleetModelContextProtocolSuiteForAgentWorkspaces.md)):

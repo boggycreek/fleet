@@ -31,7 +31,7 @@ Copyright (c) 2026 Boggy Creek Software LLC. Use of this source code is governed
 Fleet currently deploys rootless Podman containers on a single physical host workstation. In this single-node topology:
 1. Shared infrastructure services (`fleet-valkey`, `fleet-forgejo`, `fleet-postgres`, `fleet-sonarqube`) run on a host-local bridge network (`fleet-infra`).
 2. Agents access local LLM inference engines on the host via Podman host-gateway resolution (`--add-host=llm-gateway:host-gateway`) as specified in [ADR 00035](00035-HostBridgedLocalLlmInferenceGateway.md).
-3. Backplane messaging (`bp`) coordinates containerized agents and host processes using local Valkey Streams authenticated via local ACL credentials and signed via Ed25519 digital signatures as specified in [ADR 00042](00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md).
+3. Backplane messaging (`bp`) coordinates containerized agents and host processes using local Valkey Streams authenticated via local ACL credentials and signed via Ed25519 digital signatures as specified in [ADR 00042](00042-UniversalBackplaneFabric.md) and [ADR 00060](00060-StatelessConnectionProfiles.md).
 
 As engineering teams and single operators scale Fleet workloads across multiple physical nodes on a Local Area Network (LAN)—for example, a primary Linux development workstation, an Apple Silicon Mac Studio dedicated to local LLM inference, and a high-core offload build/CI server—the single-host assumption breaks down:
 
@@ -45,7 +45,7 @@ As engineering teams and single operators scale Fleet workloads across multiple 
 
 1. **Deterministic Connectivity Across Physical Nodes**: Containers operating inside isolated rootless network namespaces on separate physical machines must seamlessly resolve core services (`valkey`, `forgejo`, `llm-gateway`) regardless of host OS or physical IP address changes.
 2. **Zero-Trust Network Perimeter**: Unauthenticated raw sockets or plaintext backplane credentials must never be exposed on the LAN. Cross-host traffic must be encrypted and authenticated at the transport layer.
-3. **Preservation of Cryptographic Lineage**: Cross-host federation must preserve end-to-end Ed25519 message signing, stateless identity profiles, and capability boundaries established in [ADR 00042](00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md).
+3. **Preservation of Cryptographic Lineage**: Cross-host federation must preserve end-to-end Ed25519 message signing, stateless identity profiles, and capability boundaries established in [ADR 00042](00042-UniversalBackplaneFabric.md) and [ADR 00060](00060-StatelessConnectionProfiles.md).
 4. **Developer Ergonomics & Frictionless Onboarding**: Adding a physical node to a local Fleet cluster should require minimal manual configuration, avoiding fragile static routing tables or manual `/etc/hosts` edits.
 5. **Decoupled Local & LAN Inference Routing**: Agents must transparently route inference requests to local host GPUs or remote LAN inference rigs without modifying code or agent definitions.
 
@@ -89,7 +89,7 @@ We establish the **Multi-Machine Local Network Federation Architecture** for mul
 
 ### 4. Transport Security Perimeter & End-to-End Signature Preservation
 - **Transport Layer**: All cross-host TCP connections (Valkey Streams, Forgejo Git operations, API calls) are encrypted and authenticated using Mutual TLS (mTLS) with certificates issued by an internal Fleet Cluster Authority (`~/.config/fleet/ca/`).
-- **Application Layer**: End-to-end Ed25519 message signing ([ADR 00042](00042-UniversalCryptographicBackplaneFabricAndStatelessIdentityProfiles.md)) remains strictly enforced. Transport encryption protects payload secrecy on the LAN, while Ed25519 signatures guarantee non-repudiable message authenticity regardless of transit path.
+- **Application Layer**: End-to-end Ed25519 message signing ([ADR 00042](00042-UniversalBackplaneFabric.md)) remains strictly enforced. Transport encryption protects payload secrecy on the LAN, while Ed25519 signatures guarantee non-repudiable message authenticity regardless of transit path.
 - **Perimeter Isolation**: Unauthenticated raw Valkey sockets (port `6379`) remain strictly bound to host loopback / internal `fleet-infra` bridge interfaces and are never exposed to the physical LAN.
 
 ---
