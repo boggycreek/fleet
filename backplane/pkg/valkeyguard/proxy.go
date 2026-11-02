@@ -7,6 +7,7 @@ package valkeyguard
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ type ProxyConfig struct {
 	TargetAddr  string
 	DialTimeout time.Duration
 	Guard       GuardConfig
+	TLSConfig   *tls.Config
 }
 
 // DefaultProxyConfig returns the standard proxy configuration.
@@ -92,7 +94,13 @@ func (p *ProxyServer) Start(ctx context.Context) error {
 		return errors.New("proxy server is closed")
 	}
 
-	ln, err := net.Listen("tcp", p.cfg.ListenAddr)
+	var ln net.Listener
+	var err error
+	if p.cfg.TLSConfig != nil {
+		ln, err = tls.Listen("tcp", p.cfg.ListenAddr, p.cfg.TLSConfig)
+	} else {
+		ln, err = net.Listen("tcp", p.cfg.ListenAddr)
+	}
 	if err != nil {
 		p.mu.Unlock()
 		return fmt.Errorf("failed to listen on %s: %w", p.cfg.ListenAddr, err)
@@ -214,6 +222,16 @@ func (p *ProxyServer) serve(ctx context.Context) {
 }
 
 func (p *ProxyServer) handleConnection(ctx context.Context, clientConn net.Conn) {
+	// If the connection is a TLS connection, perform handshake with timeout
+	// to reject unauthorized or invalid TLS handshakes before dialing upstream.
+	if tlsConn, ok := clientConn.(*tls.Conn); ok {
+		handshakeCtx, cancel := context.WithTimeout(ctx, p.cfg.DialTimeout)
+		defer cancel()
+		if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+			return
+		}
+	}
+
 	// Connect to upstream Valkey target
 	dialer := net.Dialer{Timeout: p.cfg.DialTimeout}
 	upstreamConn, err := dialer.DialContext(ctx, "tcp", p.cfg.TargetAddr)
