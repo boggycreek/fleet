@@ -39,7 +39,6 @@ Empirical research spikes, benchmarks, and exploratory evaluations covering loca
 - **[Colibri MoE Inference Evaluation](evaluations/colibri-moe-inference.md)**
 - **[Distributed Inference with Exo](evaluations/distributed-inference-exo.md)**
 - **[FreeBSD Host Support & Runtime Porting Guide](evaluations/freebsd-host-support.md)**
-- **[Liquid AI LFM Model Evaluation](evaluations/liquid-ai-lfm-evaluation.md)**
 - **[Multi-Machine Local Network Federation & Gateway DNS](evaluations/multi-machine-network-federation.md)**
 - **[NVIDIA OpenShell Evaluation](evaluations/nvidia-openshell-evaluation.md)**
 - **[Valkey Stream Guard Evaluation](evaluations/valkey-stream-guard-evaluation.md)**
