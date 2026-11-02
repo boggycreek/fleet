@@ -7,6 +7,8 @@ package valkeyguard
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"strings"
@@ -539,4 +541,216 @@ func TestProxyServer_ConcurrentClients(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestProxyServer_OneWayTLS(t *testing.T) {
+	mockUpstream := startMockUpstream(t)
+	defer mockUpstream.Close()
+
+	// CA and server cert
+	caCert, caKey, caCertPEM, _ := generateTestCertificate(t, true, "Fleet Test CA", nil, nil, nil)
+	_, _, serverCertPEM, serverKeyPEM := generateTestCertificate(
+		t,
+		false,
+		"127.0.0.1",
+		[]net.IP{net.ParseIP("127.0.0.1")},
+		caCert,
+		caKey,
+	)
+
+	serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
+	if err != nil {
+		t.Fatalf("failed loading server key pair: %v", err)
+	}
+
+	serverTLSConfig := &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	p := NewProxyServer(ProxyConfig{
+		ListenAddr: "127.0.0.1:0",
+		TargetAddr: mockUpstream.Addr(),
+		TLSConfig:  serverTLSConfig,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("failed to start TLS proxy: %v", err)
+	}
+	defer p.Close()
+
+	// Client CA pool to trust the server
+	rootPool := x509.NewCertPool()
+	rootPool.AppendCertsFromPEM(caCertPEM)
+
+	clientTLSConfig := &tls.Config{
+		RootCAs:    rootPool,
+		ServerName: "127.0.0.1",
+	}
+
+	conn, err := tls.Dial("tcp", p.Addr().String(), clientTLSConfig)
+	if err != nil {
+		t.Fatalf("failed dialing proxy with TLS: %v", err)
+	}
+	defer conn.Close()
+
+	w := resp.NewWriter(conn)
+	r := resp.NewReader(conn)
+
+	if err := w.WriteCommand("PING"); err != nil {
+		t.Fatalf("failed writing PING: %v", err)
+	}
+	val, err := r.ReadValue()
+	if err != nil {
+		t.Fatalf("failed reading PONG: %v", err)
+	}
+	if val.Type != resp.TypeSimpleString || val.Str != "PONG" {
+		t.Errorf("expected PONG, got %v", val)
+	}
+}
+
+func TestProxyServer_MutualTLS(t *testing.T) {
+	mockUpstream := startMockUpstream(t)
+	defer mockUpstream.Close()
+
+	// 1. Root CA
+	caCert, caKey, caCertPEM, _ := generateTestCertificate(t, true, "Fleet Root CA", nil, nil, nil)
+
+	// 2. Server Certificate
+	_, _, serverCertPEM, serverKeyPEM := generateTestCertificate(
+		t,
+		false,
+		"127.0.0.1",
+		[]net.IP{net.ParseIP("127.0.0.1")},
+		caCert,
+		caKey,
+	)
+	serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
+	if err != nil {
+		t.Fatalf("failed to parse server keypair: %v", err)
+	}
+
+	// 3. Authorized Client Certificate (signed by caCert)
+	_, _, clientCertPEM, clientKeyPEM := generateTestCertificate(
+		t,
+		false,
+		"authorized-agent",
+		nil,
+		caCert,
+		caKey,
+	)
+	clientCert, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
+	if err != nil {
+		t.Fatalf("failed to parse client keypair: %v", err)
+	}
+
+	// 4. Rogue / Untrusted Client Certificate (signed by a different CA)
+	rogueCACert, rogueCAKey, _, _ := generateTestCertificate(t, true, "Rogue CA", nil, nil, nil)
+	_, _, rogueCertPEM, rogueKeyPEM := generateTestCertificate(
+		t,
+		false,
+		"untrusted-agent",
+		nil,
+		rogueCACert,
+		rogueCAKey,
+	)
+	rogueClientCert, err := tls.X509KeyPair(rogueCertPEM, rogueKeyPEM)
+	if err != nil {
+		t.Fatalf("failed to parse rogue keypair: %v", err)
+	}
+
+	clientCAPool := x509.NewCertPool()
+	clientCAPool.AppendCertsFromPEM(caCertPEM)
+
+	serverTLSConfig := &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    clientCAPool,
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	p := NewProxyServer(ProxyConfig{
+		ListenAddr: "127.0.0.1:0",
+		TargetAddr: mockUpstream.Addr(),
+		TLSConfig:  serverTLSConfig,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("failed to start mTLS proxy: %v", err)
+	}
+	defer p.Close()
+
+	rootPool := x509.NewCertPool()
+	rootPool.AppendCertsFromPEM(caCertPEM)
+
+	t.Run("Authorized client with valid client cert succeeds", func(t *testing.T) {
+		clientTLSConfig := &tls.Config{
+			RootCAs:      rootPool,
+			Certificates: []tls.Certificate{clientCert},
+			ServerName:   "127.0.0.1",
+		}
+
+		conn, err := tls.Dial("tcp", p.Addr().String(), clientTLSConfig)
+		if err != nil {
+			t.Fatalf("authorized client dial failed: %v", err)
+		}
+		defer conn.Close()
+
+		w := resp.NewWriter(conn)
+		r := resp.NewReader(conn)
+
+		if err := w.WriteCommand("PING"); err != nil {
+			t.Fatalf("failed writing PING: %v", err)
+		}
+		val, err := r.ReadValue()
+		if err != nil || val.Str != "PONG" {
+			t.Fatalf("expected PONG, got %v (err: %v)", val, err)
+		}
+	})
+
+	t.Run("Unauthorized client without client cert is rejected", func(t *testing.T) {
+		noCertConfig := &tls.Config{
+			RootCAs:    rootPool,
+			ServerName: "127.0.0.1",
+		}
+
+		conn, err := tls.Dial("tcp", p.Addr().String(), noCertConfig)
+		if err == nil {
+			// If dial didn't immediately fail, handshake or subsequent read/write must fail
+			defer conn.Close()
+			w := resp.NewWriter(conn)
+			_ = w.WriteCommand("PING")
+			r := resp.NewReader(conn)
+			_, readErr := r.ReadValue()
+			if readErr == nil {
+				t.Fatalf("expected connection rejection for client without certificate")
+			}
+		}
+	})
+
+	t.Run("Client with untrusted certificate is rejected", func(t *testing.T) {
+		rogueConfig := &tls.Config{
+			RootCAs:      rootPool,
+			Certificates: []tls.Certificate{rogueClientCert},
+			ServerName:   "127.0.0.1",
+		}
+
+		conn, err := tls.Dial("tcp", p.Addr().String(), rogueConfig)
+		if err == nil {
+			defer conn.Close()
+			w := resp.NewWriter(conn)
+			_ = w.WriteCommand("PING")
+			r := resp.NewReader(conn)
+			_, readErr := r.ReadValue()
+			if readErr == nil {
+				t.Fatalf("expected connection rejection for client with untrusted certificate")
+			}
+		}
+	})
 }
