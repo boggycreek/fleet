@@ -156,7 +156,7 @@ func NewAgentConfig(name, imageInput, role string, modelOpts ...string) (*AgentC
 		modelURL = NormalizeModelURL(modelOpts[0])
 	}
 	if len(modelOpts) > 1 {
-		modelName = strings.TrimSpace(modelOpts[1])
+		modelName = ResolveModelPreset(modelOpts[1])
 	}
 	if len(modelOpts) > 2 {
 		modelAPIKey = strings.TrimSpace(modelOpts[2])
