@@ -6,8 +6,28 @@
 import '../vscodeMock';
 import * as assert from 'assert';
 import { FleetAgentItem, AgentStatus } from '../../fleetTreeDataProvider';
+import { isValidAgentName } from '../../extension';
 
 suite('Fleet Extension Test Suite', () => {
+  test('isValidAgentName accepts valid agent identifiers', () => {
+    assert.strictEqual(isValidAgentName('agent-1'), true);
+    assert.strictEqual(isValidAgentName('coding_agent'), true);
+    assert.strictEqual(isValidAgentName('devbox'), true);
+    assert.strictEqual(isValidAgentName('a1'), true);
+    assert.strictEqual(isValidAgentName('Agent-Alpha'), true);
+  });
+
+  test('isValidAgentName rejects CLI flags and malicious inputs', () => {
+    assert.strictEqual(isValidAgentName('--all'), false);
+    assert.strictEqual(isValidAgentName('-f'), false);
+    assert.strictEqual(isValidAgentName(''), false);
+    assert.strictEqual(isValidAgentName('   '), false);
+    assert.strictEqual(isValidAgentName('a'), false); // Too short (min 2 chars)
+    assert.strictEqual(isValidAgentName('../traversal'), false);
+    assert.strictEqual(isValidAgentName('name;rm -rf /'), false);
+    assert.strictEqual(isValidAgentName('agent with spaces'), false);
+    assert.strictEqual(isValidAgentName('agent$foo'), false);
+  });
   test('FleetAgentItem formatting for running agent', () => {
     const agent: AgentStatus = {
       name: 'test-agent',
