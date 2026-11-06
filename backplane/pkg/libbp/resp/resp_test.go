@@ -358,6 +358,45 @@ func BenchmarkEncodeCommand(b *testing.B) {
 	}
 }
 
+type discardWriter struct{}
+
+func (discardWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func BenchmarkWriteCommand_Small(b *testing.B) {
+	w := NewWriter(discardWriter{})
+	args := []string{"PING"}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = w.WriteCommand(args...)
+	}
+}
+
+func BenchmarkWriteCommand_Medium(b *testing.B) {
+	w := NewWriter(discardWriter{})
+	args := []string{"XADD", "agent:inbox", "*", "sender", "alice", "content", "hello world", "seq", "100"}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = w.WriteCommand(args...)
+	}
+}
+
+func BenchmarkWriteCommand_Large(b *testing.B) {
+	w := NewWriter(discardWriter{})
+	var args []string
+	for i := 0; i < 50; i++ {
+		args = append(args, "field"+strconv.Itoa(i))
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = w.WriteCommand(args...)
+	}
+}
+
 func BenchmarkEncodeCommandLarge(b *testing.B) {
 	var args []string
 	for i := 0; i < 50; i++ {
