@@ -27,6 +27,7 @@ Welcome to the Fleet How-To documentation directory. While [`doc/ai/`](../ai/REA
 | **[Shared Infrastructure Management](shared-infrastructure.md)** | Manage shared Valkey 8 backplane, Forgejo 9 forge, and 128k KV cache topology presets. | `fleet infra up`, `list`, `doctor`, `down`, `fleet infra topology` |
 | **[Cross-Agent Backplane Messaging](cross-agent-backplane.md)** | Broadcast messages, send direct peer requests, reply to threads, and set status with `bp`. | `bp whoami`, `say`, `tell`, `reply`, `recv`, `peers`, `finger`, `status set` |
 | **[Diagnostics & Automated Self-Healing](diagnostics-and-healing.md)** | Inspect agent health and understand automatic defect remediation across SSH, Valkey, and Forgejo. | `fleet agent doctor <name>`, status checks & auto-healers |
+| **[Enterprise Bifrost Gateway Sidecar](enterprise-bifrost-sidecar.md)** | Deploy Bifrost as a multi-cloud AI gateway sidecar (AWS Bedrock, Vertex, Azure) on `fleet-infra`. | `podman run`, systemd Quadlet, `fleet agent create --model-url` |
 
 ---
 
