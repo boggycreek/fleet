@@ -158,9 +158,19 @@ func (c *LLMClient) ChatCompletion(ctx context.Context, req ChatCompletionReques
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp ChatCompletionResponse
 		if jsonErr := json.Unmarshal(bodyBytes, &errResp); jsonErr == nil && errResp.Error != nil && errResp.Error.Message != "" {
-			return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, errResp.Error.Message)
+			return nil, &APIError{
+				StatusCode: resp.StatusCode,
+				Type:       errResp.Error.Type,
+				Message:    errResp.Error.Message,
+				Class:      ClassifyFailure(resp.StatusCode, errResp.Error.Type, errResp.Error.Message),
+			}
 		}
-		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+		bodyStr := strings.TrimSpace(string(bodyBytes))
+		return nil, &APIError{
+			StatusCode: resp.StatusCode,
+			Message:    bodyStr,
+			Class:      ClassifyFailure(resp.StatusCode, "", bodyStr),
+		}
 	}
 
 	var completionResp ChatCompletionResponse
