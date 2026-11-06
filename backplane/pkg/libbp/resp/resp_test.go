@@ -264,6 +264,14 @@ func TestValueConversions(t *testing.T) {
 	}
 }
 
+type failingWriter struct {
+	err error
+}
+
+func (f failingWriter) Write(p []byte) (int, error) {
+	return 0, f.err
+}
+
 func TestRESPWriter(t *testing.T) {
 	buf := new(bytes.Buffer)
 	w := NewWriter(buf)
@@ -281,6 +289,23 @@ func TestRESPWriter(t *testing.T) {
 	expected := "*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$5\r\nmyval\r\n"
 	if buf.String() != expected {
 		t.Errorf("got %q, expected %q", buf.String(), expected)
+	}
+
+	// Test empty string argument serialization ($0\r\n\r\n)
+	buf.Reset()
+	if err := w.WriteCommand("SET", "empty_key", ""); err != nil {
+		t.Fatalf("WriteCommand with empty string error: %v", err)
+	}
+	expectedEmptyArg := "*3\r\n$3\r\nSET\r\n$9\r\nempty_key\r\n$0\r\n\r\n"
+	if buf.String() != expectedEmptyArg {
+		t.Errorf("got %q, expected %q", buf.String(), expectedEmptyArg)
+	}
+
+	// Test error propagation when underlying writer fails
+	expectedErr := errors.New("underlying network pipe broken")
+	errW := NewWriter(failingWriter{err: expectedErr})
+	if err := errW.WriteCommand("PING"); !errors.Is(err, expectedErr) {
+		t.Errorf("expected %v, got %v", expectedErr, err)
 	}
 
 	// Test WriteValue for multiple types
