@@ -92,8 +92,8 @@ AZURE_OPENAI_API_KEY=...
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 
 # Bifrost Server Configuration
-BIFROST_PORT=8080
-BIFROST_HOST=0.0.0.0
+APP_PORT=8080
+APP_HOST=0.0.0.0
 ```
 
 > [!IMPORTANT]
@@ -115,6 +115,7 @@ podman run -d \
   --network fleet-infra \
   --restart unless-stopped \
   --env-file ~/.config/fleet/bifrost.env \
+  -v fleet-bifrost-data:/app/data \
   -p 127.0.0.1:8088:8080 \
   docker.io/maximhq/bifrost:latest
 ```
@@ -143,6 +144,7 @@ ContainerName=fleet-bifrost
 Image=docker.io/maximhq/bifrost:latest
 Network=fleet-infra
 EnvironmentFile=%h/.config/fleet/bifrost.env
+Volume=fleet-bifrost-data:/app/data
 PublishPort=127.0.0.1:8088:8080
 
 [Service]
@@ -238,7 +240,7 @@ podman run --rm --network fleet-infra alpine/curl:latest -s \
   http://fleet-bifrost:8080/v1/models | jq .
 ```
 
-### 3. Test Chat Completion with Streaming
+### 3. Test Chat Completion (Synchronous)
 
 Send a test completion request through the gateway:
 
