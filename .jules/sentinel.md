@@ -1,0 +1,4 @@
+## 2026-11-06 - CLI Flag Injection and Malformed Input in IDE Extension Wrappers
+**Vulnerability:** Input prompts (`showInputBox`) and unvalidated command arguments in IDE plugins passing user strings directly into CLI argv vectors (`execFileAsync(cliPath, ['agent', 'start', agentName])`) or external URIs (`vscode://...`) allow CLI flag injection (e.g. entering `--all` to inadvertently affect all containers) and malformed URI schemes.
+**Learning:** Even when avoiding shell interpolation by using `execFile`, CLI utilities interpret leading hyphens (e.g. `-f`, `--all`) as command flags rather than positional arguments unless strict input validation or `--` argument termination is enforced.
+**Prevention:** Strictly validate user-supplied identifiers against the canonical backend format regex (`^[a-z0-9][a-z0-9_-]{1,63}$`) in frontend prompts and command dispatch handlers before passing them to CLI processes or URI parsers.

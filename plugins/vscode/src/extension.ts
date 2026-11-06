@@ -15,6 +15,14 @@ function getCliPath(): string {
   return config.get<string>('cliPath') || 'fleet';
 }
 
+// Validates agent names to prevent CLI argument/flag injection (e.g. "--all")
+// and invalid URI characters when constructing Remote-SSH endpoints.
+const AGENT_NAME_REGEX = /^[a-z0-9][a-z0-9_-]{1,63}$/i;
+
+export function isValidAgentName(name: string): boolean {
+  return typeof name === 'string' && AGENT_NAME_REGEX.test(name);
+}
+
 export function activate(context: vscode.ExtensionContext) {
   const treeDataProvider = new FleetTreeDataProvider();
   context.subscriptions.push(treeDataProvider);
@@ -40,7 +48,7 @@ export function activate(context: vscode.ExtensionContext) {
       agentName = item.agent.name;
       agentState = item.agent.container_state;
     } else if (typeof item === 'string') {
-      agentName = item;
+      agentName = item.trim();
     } else {
       try {
         const statuses = await treeDataProvider.fetchAgentStatuses();
@@ -68,6 +76,11 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     if (!agentName) {
+      return;
+    }
+
+    if (!isValidAgentName(agentName)) {
+      vscode.window.showErrorMessage(`Invalid agent name '${agentName}'. Must match ^[a-z0-9][a-z0-9_-]{1,63}$`);
       return;
     }
 
@@ -123,6 +136,11 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
+    if (!isValidAgentName(agentName)) {
+      vscode.window.showErrorMessage(`Invalid agent name '${agentName}'. Must match ^[a-z0-9][a-z0-9_-]{1,63}$`);
+      return;
+    }
+
     try {
       await vscode.window.withProgress(
         {
@@ -147,6 +165,11 @@ export function activate(context: vscode.ExtensionContext) {
   const stopCmd = vscode.commands.registerCommand('fleet.stop', async (item?: FleetAgentItem) => {
     const agentName = item ? item.agent.name : await promptForAgentName('stop');
     if (!agentName) {
+      return;
+    }
+
+    if (!isValidAgentName(agentName)) {
+      vscode.window.showErrorMessage(`Invalid agent name '${agentName}'. Must match ^[a-z0-9][a-z0-9_-]{1,63}$`);
       return;
     }
 
@@ -184,10 +207,21 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 async function promptForAgentName(action: string): Promise<string | undefined> {
-  return vscode.window.showInputBox({
+  const result = await vscode.window.showInputBox({
     prompt: `Enter Fleet agent name to ${action}`,
-    placeHolder: 'agent-name'
+    placeHolder: 'agent-name',
+    validateInput: (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return 'Agent name cannot be empty';
+      }
+      if (!isValidAgentName(trimmed)) {
+        return 'Invalid agent name: must start with alphanumeric character, contain only [a-z0-9_-], and be 2-64 chars';
+      }
+      return null;
+    }
   });
+  return result?.trim();
 }
 
 export function deactivate() {}
