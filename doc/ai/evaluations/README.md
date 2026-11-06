@@ -8,6 +8,7 @@ This directory contains empirical research spikes, benchmark reports, and explor
 
 | Evaluation | Focus Area | Key Findings / Outcome |
 | :--- | :--- | :--- |
+| **[Bifrost LLM Gateway](bifrost-llm-gateway.md)** | Gateway & Routing | Evaluation of maximhq/bifrost Go gateway; verdict BORROW (adopt retry/fallback patterns, reject embedded Go SDK due to zero-dep invariant, preserve host-gateway bridge). |
 | **[Colibri MoE Inference](colibri-moe-inference.md)** | Model Architecture | Mixture-of-Experts inference latency, memory footprint, and multi-agent routing trade-offs. |
 | **[Distributed Inference with Exo](distributed-inference-exo.md)** | Distributed Compute | Setup runbook and performance analysis for pooling LAN compute nodes using `exo`. |
 | **[FreeBSD Host Support](freebsd-host-support.md)** | Host OS Compatibility | FreeBSD 14.x/15.x host compatibility, bhyve microVMs, ZFS dataset volumes, and pf.conf anchor networking. |
