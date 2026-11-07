@@ -362,3 +362,155 @@ func TestAgentDoctor_Run(t *testing.T) {
 		t.Errorf("unexpected Run error: %v", err)
 	}
 }
+
+func TestAgentDoctor_Security_EndpointRedactionAndBounds(t *testing.T) {
+	checker := &mockChecker{
+		httpFunc: func(ctx context.Context, targetURL string, timeout time.Duration) (int, time.Duration, error) {
+			if timeout > 30*time.Second {
+				t.Errorf("timeout was not capped: %v", timeout)
+			}
+			return 200, 5 * time.Millisecond, nil
+		},
+		tcpFunc: func(ctx context.Context, address string, timeout time.Duration) (time.Duration, error) {
+			return 5 * time.Millisecond, nil
+		},
+	}
+
+	server := NewMCPServer(nil, checker, &bytes.Buffer{}, &bytes.Buffer{})
+
+	// Construct endpoints with credentials, control characters, oversized entries, and >20 count
+	endpoints := []any{
+		"http://user:supersecretpass@example.com:8080/path",
+		"bad\x00endpoint:9000",
+		"bad\rendpoint:9000",
+		"bad\nendpoint:9000",
+		strings.Repeat("a", 2049), // oversized
+	}
+	for i := 0; i < 25; i++ {
+		endpoints = append(endpoints, "127.0.0.1:8000")
+	}
+
+	args := map[string]any{
+		"timeout_ms": float64(60000), // exceeds 30s limit
+		"endpoints":  endpoints,
+	}
+
+	rawArgs, _ := json.Marshal(args)
+	res := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "env_check_connectivity",
+		Arguments: rawArgs,
+	})
+
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Content[0].Text)
+	}
+
+	var results []EndpointResult
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &results); err != nil {
+		t.Fatalf("failed unmarshaling results: %v", err)
+	}
+
+	// Verify userinfo password is redacted
+	foundRedacted := false
+	for _, r := range results {
+		if strings.Contains(r.Target, "supersecretpass") {
+			t.Fatalf("target leaked sensitive credentials: %s", r.Target)
+		}
+		if strings.Contains(r.Target, "http://user:xxxxx@example.com:8080/path") {
+			foundRedacted = true
+		}
+		if strings.ContainsAny(r.Target, "\x00\r\n") {
+			t.Fatalf("target contained control characters: %s", r.Target)
+		}
+		if len(r.Target) > 2048 {
+			t.Fatalf("oversized target was not filtered: len=%d", len(r.Target))
+		}
+	}
+
+	if !foundRedacted {
+		t.Errorf("expected redacted target 'http://user:xxxxx@example.com:8080/path', not found")
+	}
+
+	// Default targets (3) + max custom endpoints (20) = at most 23 results
+	if len(results) > 23 {
+		t.Errorf("expected at most 23 results (capped custom endpoints), got %d", len(results))
+	}
+}
+
+func TestAgentDoctor_Security_SensitiveEnvRedaction(t *testing.T) {
+	t.Setenv("ADMIN_PASS", "secret-pass-val")
+	t.Setenv("DB_PASSPHRASE", "my-passphrase")
+	t.Setenv("TLS_CERT", "cert-data")
+	t.Setenv("SESSION_COOKIE", "cookie-secret")
+	t.Setenv("AUTH_SESSION_ID", "session-val")
+	t.Setenv("SAFE_CONFIG_NAME", "my-config")
+
+	server := NewMCPServer(nil, nil, &bytes.Buffer{}, &bytes.Buffer{})
+	res := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "env_inspect_resources",
+		Arguments: json.RawMessage("{}"),
+	})
+
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Content[0].Text)
+	}
+
+	var report map[string]any
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &report); err != nil {
+		t.Fatalf("failed parsing json: %v", err)
+	}
+
+	envMap := report["environment"].(map[string]any)
+	for _, key := range []string{"ADMIN_PASS", "DB_PASSPHRASE", "TLS_CERT", "SESSION_COOKIE", "AUTH_SESSION_ID"} {
+		if envMap[key] != "[REDACTED]" {
+			t.Errorf("expected key %s to be [REDACTED], got: %v", key, envMap[key])
+		}
+	}
+	if envMap["SAFE_CONFIG_NAME"] != "my-config" {
+		t.Errorf("expected SAFE_CONFIG_NAME to be preserved, got: %v", envMap["SAFE_CONFIG_NAME"])
+	}
+}
+
+func TestAgentDoctor_Security_HostAssistanceValidation(t *testing.T) {
+	server := NewMCPServer(nil, nil, &bytes.Buffer{}, &bytes.Buffer{})
+
+	// 1. Reason with null bytes
+	res := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name: "env_request_host_assistance",
+		Arguments: json.RawMessage(`{"reason":"hello\u0000world"}`),
+	})
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "Invalid argument 'reason'") {
+		t.Errorf("expected error for reason with null byte, got: %+v", res)
+	}
+
+	// 2. Reason exceeding max length
+	tooLongReason := strings.Repeat("a", 4097)
+	args, _ := json.Marshal(map[string]any{"reason": tooLongReason})
+	res = server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "env_request_host_assistance",
+		Arguments: args,
+	})
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "Invalid argument 'reason'") {
+		t.Errorf("expected error for oversized reason, got: %+v", res)
+	}
+
+	// 3. Context with null bytes
+	res = server.executeTool(context.Background(), mcp.CallToolParams{
+		Name: "env_request_host_assistance",
+		Arguments: json.RawMessage(`{"reason":"valid reason","context":"bad\u0000context"}`),
+	})
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "Invalid argument 'context'") {
+		t.Errorf("expected error for context with null byte, got: %+v", res)
+	}
+
+	// 4. Context exceeding max length
+	tooLongContext := strings.Repeat("c", 65537)
+	args, _ = json.Marshal(map[string]any{"reason": "valid reason", "context": tooLongContext})
+	res = server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "env_request_host_assistance",
+		Arguments: args,
+	})
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "Invalid argument 'context'") {
+		t.Errorf("expected error for oversized context, got: %+v", res)
+	}
+}
