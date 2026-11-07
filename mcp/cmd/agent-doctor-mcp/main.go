@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -142,6 +143,14 @@ func NewMCPServer(bpClient BPClient, checker ConnectivityChecker, r io.Reader, w
 	return s
 }
 
+// redactTarget removes basic authentication credentials from target URLs to prevent credential leakage.
+func redactTarget(target string) string {
+	if u, err := url.Parse(target); err == nil && u.User != nil {
+		return u.Redacted()
+	}
+	return target
+}
+
 // EndpointResult contains the diagnostic reachability result for a single target.
 type EndpointResult struct {
 	Target    string `json:"target"`
@@ -160,6 +169,9 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		timeout := 2 * time.Second
 		if toVal, ok := args["timeout_ms"].(float64); ok && toVal > 0 {
 			timeout = time.Duration(toVal) * time.Millisecond
+			if timeout > 30*time.Second {
+				timeout = 30 * time.Second
+			}
 		}
 
 		targets := []string{}
@@ -188,10 +200,16 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		}
 		targets = append(targets, llmGateway)
 
-		// Append custom endpoints if specified
+		// Append custom endpoints if specified, bounded and sanitized against control characters
 		if customList, ok := args["endpoints"].([]any); ok {
+			if len(customList) > 20 {
+				customList = customList[:20]
+			}
 			for _, item := range customList {
 				if str, ok := item.(string); ok && str != "" {
+					if len(str) > 2048 || strings.ContainsAny(str, "\x00\r\n") {
+						continue
+					}
 					targets = append(targets, str)
 				}
 			}
@@ -199,7 +217,7 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 
 		var results []EndpointResult
 		for _, target := range targets {
-			res := EndpointResult{Target: target}
+			res := EndpointResult{Target: redactTarget(target)}
 			if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
 				res.Protocol = "HTTP"
 				code, lat, err := s.checker.CheckHTTP(ctx, target, timeout)
@@ -232,7 +250,7 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		wd, _ := os.Getwd()
 		hostname, _ := os.Hostname()
 
-		sensitiveKeys := []string{"PASSWORD", "SECRET", "KEY", "TOKEN", "AUTH", "CREDENTIAL"}
+		sensitiveKeys := []string{"PASSWORD", "PASS", "SECRET", "KEY", "TOKEN", "AUTH", "CREDENTIAL", "CERT", "COOKIE", "SESSION"}
 		sanitizedEnv := map[string]string{}
 		for _, envLine := range os.Environ() {
 			parts := strings.SplitN(envLine, "=", 2)
@@ -274,10 +292,16 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 
 	case "env_request_host_assistance":
 		reason, _ := args["reason"].(string)
-		if reason == "" {
+		if strings.TrimSpace(reason) == "" {
 			return mcp.ErrorResult("Missing required argument 'reason'")
 		}
+		if strings.Contains(reason, "\x00") || len(reason) > 4096 {
+			return mcp.ErrorResult("Invalid argument 'reason'")
+		}
 		contextInfo, _ := args["context"].(string)
+		if strings.Contains(contextInfo, "\x00") || len(contextInfo) > 65536 {
+			return mcp.ErrorResult("Invalid argument 'context'")
+		}
 
 		if s.bpClient == nil {
 			return mcp.ErrorResult("Backplane client not configured; cannot request human assistance")
