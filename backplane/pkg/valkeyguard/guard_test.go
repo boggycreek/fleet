@@ -446,3 +446,53 @@ func TestGuardEngine_EdgeCasesAndMalformedFrames(t *testing.T) {
 		t.Errorf("expected default config fallback, got %+v", e0.Config())
 	}
 }
+
+func TestIsValidCitation(t *testing.T) {
+	tests := []struct {
+		input string
+		valid bool
+	}{
+		{"alice#1", true},
+		{"test-agent_01#42", true},
+		{"worker_node-99#1234567890", true},
+		{"a#0", true},
+		{"_#9", true},
+		{"-#1234567890", true},
+		{"", false},
+		{"#1", false},
+		{"alice#", false},
+		{"alice##1", false},
+		{"alice#1#2", false},
+		{"alice#xyz", false},
+		{"alice!@##1", false},
+		{"alice 1#2", false},
+		{"alice# 1", false},
+		{"simple", false},
+	}
+
+	for _, tt := range tests {
+		got := isValidCitation(tt.input)
+		if got != tt.valid {
+			t.Errorf("isValidCitation(%q) = %v; want %v", tt.input, got, tt.valid)
+		}
+	}
+}
+
+func BenchmarkIsValidCitation(b *testing.B) {
+	citation := "alice#123"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = isValidCitation(citation)
+	}
+}
+
+func BenchmarkGuardEngine_InspectCommand_XADD(b *testing.B) {
+	engine := NewGuardEngine(DefaultGuardConfig())
+	args := []string{"XADD", "stream", "*", "citation", "alice#1", "sender", "alice", "content", "hello world"}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _, _ = engine.InspectCommand(args, "alice")
+	}
+}
