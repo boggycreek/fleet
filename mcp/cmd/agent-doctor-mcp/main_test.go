@@ -198,12 +198,95 @@ func TestAgentDoctor_EnvCheckConnectivity_FallbackGitea(t *testing.T) {
 	}
 }
 
+func TestAgentDoctor_EnvCheckConnectivity_SecurityHardening(t *testing.T) {
+	t.Setenv("BP_HOST", "127.0.0.1")
+	t.Setenv("BP_PORT", "6379")
+	t.Setenv("FORGEJO_URL", "")
+	t.Setenv("GITEA_URL", "")
+	t.Setenv("LLM_GATEWAY_URL", "")
+
+	checker := &mockChecker{
+		tcpFunc: func(ctx context.Context, address string, timeout time.Duration) (time.Duration, error) {
+			return 5 * time.Millisecond, nil
+		},
+		httpFunc: func(ctx context.Context, targetURL string, timeout time.Duration) (int, time.Duration, error) {
+			if timeout > 30*time.Second {
+				t.Errorf("timeout was not clamped to 30s: %v", timeout)
+			}
+			return 200, 5 * time.Millisecond, nil
+		},
+	}
+
+	server := NewMCPServer(nil, checker, &bytes.Buffer{}, &bytes.Buffer{})
+
+	// 1. Test userinfo credential redaction
+	// 2. Test timeout clamping (> 30000ms)
+	// 3. Test control character rejection
+	// 4. Test capping custom endpoints to 20
+	customEndpoints := []any{
+		"http://admin:supersecret@127.0.0.1:8080/probe",
+		"http://evil.com/newline\ninjection",
+		"http://evil.com/null\x00byte",
+	}
+	for i := 0; i < 25; i++ {
+		customEndpoints = append(customEndpoints, "http://127.0.0.1:9000/service")
+	}
+
+	args := map[string]any{
+		"timeout_ms": float64(999999), // Exceeds 30s max
+		"endpoints":  customEndpoints,
+	}
+
+	rawArgs, _ := json.Marshal(args)
+	res := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "env_check_connectivity",
+		Arguments: rawArgs,
+	})
+
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", res.Content[0].Text)
+	}
+
+	var results []EndpointResult
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &results); err != nil {
+		t.Fatalf("failed unmarshaling results: %v", err)
+	}
+
+	foundRedacted := false
+	customCount := 0
+	for _, r := range results {
+		if strings.Contains(r.Target, "supersecret") {
+			t.Errorf("found unredacted credentials in target: %s", r.Target)
+		}
+		if strings.Contains(r.Target, "admin:xxxxx@127.0.0.1:8080") {
+			foundRedacted = true
+		}
+		if strings.Contains(r.Target, "\n") || strings.Contains(r.Target, "\x00") {
+			t.Errorf("found unescaped control character in target: %s", r.Target)
+		}
+		if strings.Contains(r.Target, "8080") || strings.Contains(r.Target, "9000") {
+			customCount++
+		}
+	}
+
+	if !foundRedacted {
+		t.Errorf("expected redacted userinfo target, got: %+v", results)
+	}
+	if customCount > 20 {
+		t.Errorf("expected custom endpoints capped to at most 20, got %d", customCount)
+	}
+}
+
 func TestAgentDoctor_EnvInspectResources(t *testing.T) {
 	t.Setenv("BP_AGENT", "test-agent-alpha")
 	t.Setenv("TEST_APP_PASSWORD", "super-secret-pw")
 	t.Setenv("API_TOKEN", "bearer-token-123")
 	t.Setenv("UNSAFE_KEY", "priv-key")
 	t.Setenv("PLAIN_VAR", "public-val")
+	t.Setenv("SSL_CLIENT_CERT", "cert-data")
+	t.Setenv("USER_SESSION_ID", "sess-xyz")
+	t.Setenv("HTTP_AUTH_COOKIE", "cookie-val")
+	t.Setenv("SERVICE_PASS", "pass-123")
 
 	server := NewMCPServer(nil, nil, &bytes.Buffer{}, &bytes.Buffer{})
 
@@ -227,6 +310,18 @@ func TestAgentDoctor_EnvInspectResources(t *testing.T) {
 	}
 	if envMap["API_TOKEN"] != "[REDACTED]" {
 		t.Errorf("expected API_TOKEN redacted, got: %v", envMap["API_TOKEN"])
+	}
+	if envMap["SSL_CLIENT_CERT"] != "[REDACTED]" {
+		t.Errorf("expected SSL_CLIENT_CERT redacted, got: %v", envMap["SSL_CLIENT_CERT"])
+	}
+	if envMap["USER_SESSION_ID"] != "[REDACTED]" {
+		t.Errorf("expected USER_SESSION_ID redacted, got: %v", envMap["USER_SESSION_ID"])
+	}
+	if envMap["HTTP_AUTH_COOKIE"] != "[REDACTED]" {
+		t.Errorf("expected HTTP_AUTH_COOKIE redacted, got: %v", envMap["HTTP_AUTH_COOKIE"])
+	}
+	if envMap["SERVICE_PASS"] != "[REDACTED]" {
+		t.Errorf("expected SERVICE_PASS redacted, got: %v", envMap["SERVICE_PASS"])
 	}
 	if envMap["PLAIN_VAR"] != "public-val" {
 		t.Errorf("expected PLAIN_VAR preserved, got: %v", envMap["PLAIN_VAR"])

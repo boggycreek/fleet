@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -159,6 +160,9 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 	case "env_check_connectivity":
 		timeout := 2 * time.Second
 		if toVal, ok := args["timeout_ms"].(float64); ok && toVal > 0 {
+			if toVal > 30000 {
+				toVal = 30000
+			}
 			timeout = time.Duration(toVal) * time.Millisecond
 		}
 
@@ -188,18 +192,30 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		}
 		targets = append(targets, llmGateway)
 
-		// Append custom endpoints if specified
+		// Append custom endpoints if specified (cap at 20 endpoints to prevent resource exhaustion)
 		if customList, ok := args["endpoints"].([]any); ok {
+			count := 0
 			for _, item := range customList {
-				if str, ok := item.(string); ok && str != "" {
-					targets = append(targets, str)
+				if count >= 20 {
+					break
+				}
+				if str, ok := item.(string); ok && str != "" && len(str) < 2048 {
+					if !strings.ContainsAny(str, "\r\n\x00") {
+						targets = append(targets, str)
+						count++
+					}
 				}
 			}
 		}
 
 		var results []EndpointResult
 		for _, target := range targets {
-			res := EndpointResult{Target: target}
+			displayTarget := target
+			if u, err := url.Parse(target); err == nil && u.User != nil {
+				displayTarget = u.Redacted()
+			}
+
+			res := EndpointResult{Target: displayTarget}
 			if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
 				res.Protocol = "HTTP"
 				code, lat, err := s.checker.CheckHTTP(ctx, target, timeout)
@@ -232,7 +248,7 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		wd, _ := os.Getwd()
 		hostname, _ := os.Hostname()
 
-		sensitiveKeys := []string{"PASSWORD", "SECRET", "KEY", "TOKEN", "AUTH", "CREDENTIAL"}
+		sensitiveKeys := []string{"PASS", "CERT", "COOKIE", "SESSION", "SECRET", "KEY", "TOKEN", "AUTH", "CREDENTIAL"}
 		sanitizedEnv := map[string]string{}
 		for _, envLine := range os.Environ() {
 			parts := strings.SplitN(envLine, "=", 2)
