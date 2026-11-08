@@ -354,6 +354,22 @@ func TestRESPWriter(t *testing.T) {
 	}
 }
 
+func TestDigitCount(t *testing.T) {
+	testCases := []int{
+		0, 1, 9, 10, 11, 99, 100, 101, 999, 1000, 1024, 9999,
+		10000, 99999, 100000, 999999, 1000000, 9999999, 10000000,
+		99999999, 100000000, 999999999, 1000000000, 1048576, 50000000,
+	}
+
+	for _, n := range testCases {
+		expected := len(strconv.Itoa(n))
+		actual := digitCount(n)
+		if actual != expected {
+			t.Errorf("digitCount(%d) = %d, expected %d", n, actual, expected)
+		}
+	}
+}
+
 func TestEncodeCommand(t *testing.T) {
 	encoded := EncodeCommand("XADD", "mystream", "*", "field", "value")
 	expected := "*5\r\n$4\r\nXADD\r\n$8\r\nmystream\r\n$1\r\n*\r\n$5\r\nfield\r\n$5\r\nvalue\r\n"
@@ -378,6 +394,7 @@ func TestReadErrorHelper(t *testing.T) {
 func BenchmarkEncodeCommand(b *testing.B) {
 	args := []string{"SET", "mykey", "myvalue", "EX", "60"}
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		EncodeCommand(args...)
 	}
@@ -428,6 +445,7 @@ func BenchmarkEncodeCommandLarge(b *testing.B) {
 		args = append(args, "arg"+strconv.Itoa(i))
 	}
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		EncodeCommand(args...)
 	}
@@ -441,6 +459,7 @@ func BenchmarkEncodeCommandLargePayload(b *testing.B) {
 	payloadStr := string(payload)
 	args := []string{"SET", "mykey", payloadStr, "EX", "60"}
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		EncodeCommand(args...)
 	}
