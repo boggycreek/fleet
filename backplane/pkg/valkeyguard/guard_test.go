@@ -446,3 +446,60 @@ func TestGuardEngine_EdgeCasesAndMalformedFrames(t *testing.T) {
 		t.Errorf("expected default config fallback, got %+v", e0.Config())
 	}
 }
+
+func TestIsValidCitation_UnitEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"ShortestValid", "a#0", true},
+		{"TypicalValid", "agent-1#42", true},
+		{"UppercaseAndUnderscores", "AGENT_Worker-09#9999", true},
+		{"EmptyString", "", false},
+		{"TooShort", "a#", false},
+		{"HashOnly", "#", false},
+		{"MissingSequence", "agent#", false},
+		{"MissingAgent", "#123", false},
+		{"MultipleHashes", "agent#12#34", false},
+		{"NonNumericSequence", "agent#seq", false},
+		{"NegativeSequence", "agent#-1", false},
+		{"WhitespaceInAgent", "ag ent#1", false},
+		{"WhitespaceInSequence", "agent#1 2", false},
+		{"SpecialCharacters", "agent@home#10", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isValidCitation(tt.input)
+			if got != tt.expected {
+				t.Errorf("isValidCitation(%q) = %v, want %v", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func BenchmarkIsValidCitation(b *testing.B) {
+	citation := "agent-worker-01#987654"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if !isValidCitation(citation) {
+			b.Fatal("unexpected invalid citation")
+		}
+	}
+}
+
+func BenchmarkInspectCommand_XADD_Citation(b *testing.B) {
+	engine := NewGuardEngine(DefaultGuardConfig())
+	args := []string{"XADD", "mystream", "*", "sender", "alice", "citation", "alice#42", "payload", "hello world"}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		cmd := append([]string(nil), args...)
+		_, _, err := engine.InspectCommand(cmd, "alice")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
