@@ -318,6 +318,9 @@ func TestStartAgentContainerWithModelAndMounts(t *testing.T) {
 	}
 
 	argsJoined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(argsJoined, "--init") {
+		t.Errorf("expected --init in args: %s", argsJoined)
+	}
 	if !strings.Contains(argsJoined, "llm-gateway:11434/v1") {
 		t.Errorf("expected llm-gateway URL translation in args: %s", argsJoined)
 	}

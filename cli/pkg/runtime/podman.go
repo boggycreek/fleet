@@ -641,7 +641,7 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 	var args []string
 	if usePod {
 		args = []string{
-			"run", "-d",
+			"run", "-d", "--init",
 			"--pod", podName,
 			"--name", cfg.ContainerName,
 			"--hostname", fmt.Sprintf("%s-sandbox", cfg.Name),
@@ -658,7 +658,7 @@ func StartAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths con
 		}
 	} else {
 		args = []string{
-			"run", "-d",
+			"run", "-d", "--init",
 			"--name", cfg.ContainerName,
 			"--hostname", fmt.Sprintf("%s-sandbox", cfg.Name),
 			"--network", netName,
@@ -813,7 +813,7 @@ func startHostAgentContainer(ctx context.Context, cfg *config.AgentConfig, paths
 	}
 
 	args := []string{
-		"run", "-d", "-i", "-t",
+		"run", "-d", "-i", "-t", "--init",
 		"--name", cfg.ContainerName,
 		"--hostname", fmt.Sprintf("%s-sandbox", cfg.Name),
 		"--network", netName,

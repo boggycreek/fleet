@@ -460,6 +460,9 @@ func TestStartHostAgentContainer(t *testing.T) {
 	if !strings.Contains(runCmd, "--add-host llm-gateway:host-gateway") {
 		t.Errorf("expected --add-host in run command, got: %s", runCmd)
 	}
+	if !strings.Contains(runCmd, "--init") {
+		t.Errorf("expected --init in run command, got: %s", runCmd)
+	}
 	if !strings.Contains(runCmd, "--userns=keep-id:uid=1000,gid=1000") {
 		t.Errorf("expected keep-id userns mapping in run command, got: %s", runCmd)
 	}
@@ -502,10 +505,17 @@ func TestStartAgentContainerSecrets(t *testing.T) {
 		t.Fatalf("expected podman run to be called")
 	}
 
+	hasInit := false
 	for _, arg := range runArgs {
+		if arg == "--init" {
+			hasInit = true
+		}
 		if strings.Contains(arg, "supersecret") {
 			t.Errorf("secret leaked in argv: %s", arg)
 		}
+	}
+	if !hasInit {
+		t.Errorf("expected --init in standalone container runArgs, got: %v", runArgs)
 	}
 }
 
@@ -940,10 +950,14 @@ func TestStartAgentContainer_PodMode(t *testing.T) {
 
 	// Verify runArgs contains --pod fleet-frank and does NOT contain --network or -p or --add-host
 	hasPod := false
+	hasInit := false
 	hasNetwork := false
 	hasPort := false
 	hasAddHost := false
 	for i, arg := range runArgs {
+		if arg == "--init" {
+			hasInit = true
+		}
 		if arg == "--pod" && i+1 < len(runArgs) && runArgs[i+1] == "fleet-frank" {
 			hasPod = true
 		}
@@ -958,6 +972,9 @@ func TestStartAgentContainer_PodMode(t *testing.T) {
 		}
 	}
 
+	if !hasInit {
+		t.Errorf("expected --init in pod container runArgs, got: %v", runArgs)
+	}
 	if !hasPod {
 		t.Errorf("expected --pod fleet-frank in runArgs, got: %v", runArgs)
 	}
