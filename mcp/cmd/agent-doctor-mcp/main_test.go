@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -198,9 +199,97 @@ func TestAgentDoctor_EnvCheckConnectivity_FallbackGitea(t *testing.T) {
 	}
 }
 
+func TestAgentDoctor_EnvCheckConnectivity_SecurityHardening(t *testing.T) {
+	var observedTimeout time.Duration
+	checker := &mockChecker{
+		tcpFunc: func(ctx context.Context, address string, timeout time.Duration) (time.Duration, error) {
+			observedTimeout = timeout
+			if strings.Contains(address, "secretpass") {
+				return 0, errors.New("connection failed to secretpass")
+			}
+			return 5 * time.Millisecond, nil
+		},
+		httpFunc: func(ctx context.Context, targetURL string, timeout time.Duration) (int, time.Duration, error) {
+			observedTimeout = timeout
+			if strings.Contains(targetURL, "secrettoken") {
+				return 0, 0, fmt.Errorf("dial error to %s", targetURL)
+			}
+			return 200, 5 * time.Millisecond, nil
+		},
+	}
+
+	server := NewMCPServer(nil, checker, &bytes.Buffer{}, &bytes.Buffer{})
+
+	// Construct endpoints with credentials, oversized endpoints, control characters, and excess (>20)
+	var customEndpoints []any
+	customEndpoints = append(customEndpoints, "http://admin:secrettoken@internal-auth:8080/health")
+	customEndpoints = append(customEndpoints, "tcp-user:secretpass@127.0.0.1:9000")
+	customEndpoints = append(customEndpoints, "http://bad-control\x00char:8080")
+	customEndpoints = append(customEndpoints, "http://bad-newline\nchar:8080")
+	customEndpoints = append(customEndpoints, strings.Repeat("a", 2049))
+
+	for i := 0; i < 30; i++ {
+		customEndpoints = append(customEndpoints, fmt.Sprintf("http://endpoint-%d.local:80", i))
+	}
+
+	args := map[string]any{
+		"timeout_ms": float64(60000), // Exceeds 30s max
+		"endpoints":  customEndpoints,
+	}
+
+	rawArgs, _ := json.Marshal(args)
+	res := server.executeTool(context.Background(), mcp.CallToolParams{
+		Name:      "env_check_connectivity",
+		Arguments: rawArgs,
+	})
+
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", res.Content[0].Text)
+	}
+
+	// Verify timeout clamped to 30s
+	if observedTimeout != 30*time.Second {
+		t.Errorf("expected timeout clamped to 30s, got: %v", observedTimeout)
+	}
+
+	var results []EndpointResult
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &results); err != nil {
+		t.Fatalf("failed unmarshaling results: %v", err)
+	}
+
+	foundRedactedHTTP := false
+	for _, r := range results {
+		if strings.Contains(r.Target, "secrettoken") || strings.Contains(r.Error, "secrettoken") {
+			t.Errorf("sensitive credential leaked in result: %+v", r)
+		}
+		if strings.Contains(r.Target, "admin:xxxxx@internal-auth:8080/health") {
+			foundRedactedHTTP = true
+		}
+		if strings.Contains(r.Target, "bad-control") || strings.Contains(r.Target, "bad-newline") {
+			t.Errorf("endpoint with control characters was not filtered out: %s", r.Target)
+		}
+		if len(r.Target) > 2048 {
+			t.Errorf("oversized endpoint was not filtered out")
+		}
+	}
+
+	if !foundRedactedHTTP {
+		t.Errorf("expected redacted userinfo in target, results: %+v", results)
+	}
+
+	// 3 default endpoints (bp, forgejo/gitea if any or bp + llmGateway = 2-3) + max 20 custom = max 23
+	if len(results) > 24 {
+		t.Errorf("expected custom endpoints capped to 20, got total results %d", len(results))
+	}
+}
+
 func TestAgentDoctor_EnvInspectResources(t *testing.T) {
 	t.Setenv("BP_AGENT", "test-agent-alpha")
 	t.Setenv("TEST_APP_PASSWORD", "super-secret-pw")
+	t.Setenv("DB_PASS", "db-pass-123")
+	t.Setenv("SSL_CERT", "cert-data")
+	t.Setenv("SESSION_COOKIE", "cookie-xyz")
+	t.Setenv("WEB_SESSION_ID", "sess-abc")
 	t.Setenv("API_TOKEN", "bearer-token-123")
 	t.Setenv("UNSAFE_KEY", "priv-key")
 	t.Setenv("PLAIN_VAR", "public-val")
@@ -224,6 +313,18 @@ func TestAgentDoctor_EnvInspectResources(t *testing.T) {
 	envMap := report["environment"].(map[string]any)
 	if envMap["TEST_APP_PASSWORD"] != "[REDACTED]" {
 		t.Errorf("expected TEST_APP_PASSWORD redacted, got: %v", envMap["TEST_APP_PASSWORD"])
+	}
+	if envMap["DB_PASS"] != "[REDACTED]" {
+		t.Errorf("expected DB_PASS redacted, got: %v", envMap["DB_PASS"])
+	}
+	if envMap["SSL_CERT"] != "[REDACTED]" {
+		t.Errorf("expected SSL_CERT redacted, got: %v", envMap["SSL_CERT"])
+	}
+	if envMap["SESSION_COOKIE"] != "[REDACTED]" {
+		t.Errorf("expected SESSION_COOKIE redacted, got: %v", envMap["SESSION_COOKIE"])
+	}
+	if envMap["WEB_SESSION_ID"] != "[REDACTED]" {
+		t.Errorf("expected WEB_SESSION_ID redacted, got: %v", envMap["WEB_SESSION_ID"])
 	}
 	if envMap["API_TOKEN"] != "[REDACTED]" {
 		t.Errorf("expected API_TOKEN redacted, got: %v", envMap["API_TOKEN"])
@@ -253,7 +354,7 @@ func TestAgentDoctor_EnvRequestHostAssistance(t *testing.T) {
 	t.Run("NoBPClientConfigured", func(t *testing.T) {
 		server := NewMCPServer(nil, nil, &bytes.Buffer{}, &bytes.Buffer{})
 		res := server.executeTool(context.Background(), mcp.CallToolParams{
-			Name: "env_request_host_assistance",
+			Name:      "env_request_host_assistance",
 			Arguments: json.RawMessage(`{"reason":"Need permission for disk resize"}`),
 		})
 		if !res.IsError || !strings.Contains(res.Content[0].Text, "Backplane client not configured") {
@@ -277,7 +378,7 @@ func TestAgentDoctor_EnvRequestHostAssistance(t *testing.T) {
 
 		server := NewMCPServer(mock, nil, &bytes.Buffer{}, &bytes.Buffer{})
 		res := server.executeTool(context.Background(), mcp.CallToolParams{
-			Name: "env_request_host_assistance",
+			Name:      "env_request_host_assistance",
 			Arguments: json.RawMessage(`{"reason":"Build failure on locked file","context":"error: permission denied at /etc/locked"}`),
 		})
 
@@ -305,7 +406,7 @@ func TestAgentDoctor_EnvRequestHostAssistance(t *testing.T) {
 
 		server := NewMCPServer(mock, nil, &bytes.Buffer{}, &bytes.Buffer{})
 		res := server.executeTool(context.Background(), mcp.CallToolParams{
-			Name: "env_request_host_assistance",
+			Name:      "env_request_host_assistance",
 			Arguments: json.RawMessage(`{"reason":"General assistance"}`),
 		})
 

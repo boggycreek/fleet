@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -160,6 +161,9 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		timeout := 2 * time.Second
 		if toVal, ok := args["timeout_ms"].(float64); ok && toVal > 0 {
 			timeout = time.Duration(toVal) * time.Millisecond
+			if timeout > 30*time.Second {
+				timeout = 30 * time.Second
+			}
 		}
 
 		targets := []string{}
@@ -188,18 +192,31 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		}
 		targets = append(targets, llmGateway)
 
-		// Append custom endpoints if specified
+		// Append custom endpoints if specified (cap to 20 endpoints, <2048 chars, no control characters)
 		if customList, ok := args["endpoints"].([]any); ok {
+			count := 0
 			for _, item := range customList {
-				if str, ok := item.(string); ok && str != "" {
-					targets = append(targets, str)
+				if count >= 20 {
+					break
+				}
+				if str, ok := item.(string); ok {
+					str = strings.TrimSpace(str)
+					if str != "" && len(str) < 2048 && !hasControlCharacters(str) {
+						targets = append(targets, str)
+						count++
+					}
 				}
 			}
 		}
 
 		var results []EndpointResult
 		for _, target := range targets {
-			res := EndpointResult{Target: target}
+			displayTarget := target
+			if u, parseErr := url.Parse(target); parseErr == nil && u.User != nil {
+				displayTarget = u.Redacted()
+			}
+
+			res := EndpointResult{Target: displayTarget}
 			if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
 				res.Protocol = "HTTP"
 				code, lat, err := s.checker.CheckHTTP(ctx, target, timeout)
@@ -207,7 +224,7 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 				res.Code = code
 				if err != nil {
 					res.Status = "UNREACHABLE"
-					res.Error = err.Error()
+					res.Error = strings.ReplaceAll(err.Error(), target, displayTarget)
 				} else {
 					res.Status = "OK"
 				}
@@ -217,7 +234,7 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 				res.LatencyMs = lat.Milliseconds()
 				if err != nil {
 					res.Status = "UNREACHABLE"
-					res.Error = err.Error()
+					res.Error = strings.ReplaceAll(err.Error(), target, displayTarget)
 				} else {
 					res.Status = "OK"
 				}
@@ -232,7 +249,7 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 		wd, _ := os.Getwd()
 		hostname, _ := os.Hostname()
 
-		sensitiveKeys := []string{"PASSWORD", "SECRET", "KEY", "TOKEN", "AUTH", "CREDENTIAL"}
+		sensitiveKeys := []string{"PASS", "CERT", "COOKIE", "SESSION", "SECRET", "KEY", "TOKEN", "AUTH", "CREDENTIAL"}
 		sanitizedEnv := map[string]string{}
 		for _, envLine := range os.Environ() {
 			parts := strings.SplitN(envLine, "=", 2)
@@ -315,6 +332,15 @@ func (s *MCPServer) executeTool(ctx context.Context, params mcp.CallToolParams) 
 	default:
 		return mcp.ErrorResult(fmt.Sprintf("Unknown tool: %s", params.Name))
 	}
+}
+
+func hasControlCharacters(s string) bool {
+	for _, r := range s {
+		if r < 32 || r == 127 {
+			return true
+		}
+	}
+	return false
 }
 
 // Run executes the agent-doctor MCP server reading from r and writing to w.
