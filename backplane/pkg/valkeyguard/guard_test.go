@@ -446,3 +446,74 @@ func TestGuardEngine_EdgeCasesAndMalformedFrames(t *testing.T) {
 		t.Errorf("expected default config fallback, got %+v", e0.Config())
 	}
 }
+
+func TestIsValidCitation_EquivalenceAndEdgeCases(t *testing.T) {
+	testCases := []string{
+		"alice#1",
+		"test-agent_01#42",
+		"bob#100",
+		"worker-node_01#1234567890",
+		"a#0",
+		"Z#99999",
+		"0#0",
+		"-#0",
+		"_#0",
+		"",
+		"#",
+		"#1",
+		"a#",
+		"alice1",
+		"alice#xyz",
+		"alice!@##1",
+		"alice#1#2",
+		"alice##1",
+		"#123",
+		"agent#",
+		"ag ent#1",
+		"agent# 1",
+		"agent#1 ",
+		"agent#1\n",
+		"agent\x00#1",
+		"agent#1\x00",
+	}
+
+	for _, tc := range testCases {
+		expected := citationRegex.MatchString(tc)
+		actual := isValidCitation(tc)
+		if expected != actual {
+			t.Errorf("isValidCitation(%q) = %v, expected %v (regex match)", tc, actual, expected)
+		}
+	}
+}
+
+func BenchmarkIsValidCitation(b *testing.B) {
+	citation := "worker-node_01#1234567890"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = isValidCitation(citation)
+	}
+}
+
+func BenchmarkIsValidCitation_Regex(b *testing.B) {
+	citation := "worker-node_01#1234567890"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = citationRegex.MatchString(citation)
+	}
+}
+
+func BenchmarkInspectCommand_XADD_Citation(b *testing.B) {
+	engine := NewGuardEngine(DefaultGuardConfig())
+	sessionUser := "alice"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		cmdArgs := []string{"XADD", "agent:inbox", "*", "sender", "alice", "citation", "worker-01#12345", "content", "hello world"}
+		_, _, err := engine.InspectCommand(cmdArgs, sessionUser)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
