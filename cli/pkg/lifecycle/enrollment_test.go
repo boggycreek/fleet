@@ -519,6 +519,22 @@ func TestNewEnrollmentServerValidation(t *testing.T) {
 		t.Errorf("expected error for empty agent name")
 	}
 
+	// Invalid agent names
+	invalidNames := []string{
+		"-invalid-start",
+		"invalid/slash",
+		"invalid..traversal",
+		"a",
+		"invalid name with spaces",
+		"invalid$(whoami)",
+		"; rm -rf /",
+	}
+	for _, inv := range invalidNames {
+		if _, err := NewEnrollmentServer(EnrollmentConfig{AgentName: inv}); err == nil {
+			t.Errorf("expected error for invalid agent name %q, got nil", inv)
+		}
+	}
+
 	// Valid creation with defaults
 	srv, err := NewEnrollmentServer(EnrollmentConfig{
 		AgentName: "alpha",
@@ -572,6 +588,20 @@ func TestEnrollmentServerMethodNotAllowed(t *testing.T) {
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	client := &http.Client{Timeout: 2 * time.Second}
+
+	// Test install script with malformed/injected token
+	respMalToken, err := client.Get(srv.URL("127.0.0.1") + "/install/post-node?token=bad%22%0Aecho%20pwned")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	bodyMalToken, _ := io.ReadAll(respMalToken.Body)
+	_ = respMalToken.Body.Close()
+	if strings.Contains(string(bodyMalToken), "pwned") {
+		t.Errorf("malformed token should not be reflected into install script: %s", string(bodyMalToken))
+	}
+	if !strings.Contains(string(bodyMalToken), "__FLEET_ENROLL_TOKEN__") {
+		t.Errorf("expected placeholder __FLEET_ENROLL_TOKEN__ preserved when token is invalid: %s", string(bodyMalToken))
+	}
 
 	// 1. POST /install/post-node -> 405
 	resp, err := client.Post(srv.URL("127.0.0.1")+"/install/post-node", "text/plain", strings.NewReader("bad"))
