@@ -89,12 +89,50 @@ func (w *Writer) WriteValue(v Value) error {
 	}
 }
 
+// digitCount returns the number of decimal digits for a non-negative integer.
+// Performance Optimization: Avoids strconv.Itoa allocations when computing string lengths.
+func digitCount(n int) int {
+	if n < 10 {
+		return 1
+	}
+	if n < 100 {
+		return 2
+	}
+	if n < 1000 {
+		return 3
+	}
+	if n < 10000 {
+		return 4
+	}
+	if n < 100000 {
+		return 5
+	}
+	if n < 1000000 {
+		return 6
+	}
+	if n < 10000000 {
+		return 7
+	}
+	if n < 100000000 {
+		return 8
+	}
+	if n < 1000000000 {
+		return 9
+	}
+	count := 0
+	for n > 0 {
+		count++
+		n /= 10
+	}
+	return count
+}
+
 // EncodeCommand produces the byte slice of a RESP array command
 func EncodeCommand(args ...string) []byte {
 	var totalLen int
-	totalLen += len(strconv.Itoa(len(args))) + 3 // "*<len>\r\n"
+	totalLen += digitCount(len(args)) + 3 // "*<len>\r\n"
 	for _, a := range args {
-		totalLen += 1 + len(strconv.Itoa(len(a))) + 2 + len(a) + 2 // "$<len>\r\n<data>\r\n"
+		totalLen += 1 + digitCount(len(a)) + 2 + len(a) + 2 // "$<len>\r\n<data>\r\n"
 	}
 	buf := make([]byte, 0, totalLen)
 	buf = append(buf, '*')
