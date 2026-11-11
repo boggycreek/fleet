@@ -20,9 +20,15 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+)
+
+var (
+	validAgentNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,63}$`)
+	validTokenPattern     = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 )
 
 // DefaultEnrollmentPort is the default port for the ephemeral enrollment HTTP server.
@@ -203,6 +209,9 @@ func NewEnrollmentServer(cfg EnrollmentConfig) (*EnrollmentServer, error) {
 	name := strings.ToLower(strings.TrimSpace(cfg.AgentName))
 	if name == "" {
 		return nil, fmt.Errorf("agent name cannot be empty")
+	}
+	if !validAgentNamePattern.MatchString(name) {
+		return nil, fmt.Errorf("invalid agent name %q: must match ^[a-z0-9][a-z0-9_-]{1,63}$", name)
 	}
 
 	token := cfg.Token
@@ -428,7 +437,7 @@ func (s *EnrollmentServer) handleInstall(w http.ResponseWriter, r *http.Request)
 
 	content := s.installScript
 	queryToken := r.URL.Query().Get("token")
-	if queryToken != "" {
+	if queryToken != "" && validTokenPattern.MatchString(queryToken) {
 		content = strings.ReplaceAll(content, "__FLEET_ENROLL_TOKEN__", queryToken)
 	}
 
